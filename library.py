@@ -139,7 +139,7 @@ def probe(path):
         chapters.append({"start": round(float(c.get("start_time") or 0), 2),
                          "title": "" if GENERIC_CHAPTER.match(title) else title})
     return {"dur": dur, "quality": q, "audio": audio, "subs": list(dict.fromkeys(subs)),
-            "chapters": chapters, "extSubs": ext_subs, "v": PROBE_VERSION}
+            "chapters": chapters, "extSubs": ext_subs, "embSubs": subs[:len(subs) - len(ext_subs)], "v": PROBE_VERSION}
 
 
 SUB_EXTS = {".srt", ".ass", ".ssa", ".vtt"}
@@ -393,6 +393,24 @@ class Library:
         self.busy = len(todo)
         if gone:
             self._drop_empty_shows()
+            self.save()
+        # legenda colocada depois ao lado de um vídeo que já estava na biblioteca
+        changed = False
+        for r in list(self.files.values()):
+            if r.get("broken") or "extSubs" not in r:
+                continue
+            try:
+                ext = find_subs(r["path"])
+            except OSError:
+                continue
+            if [x["path"] for x in ext] != [x["path"] for x in r["extSubs"]]:
+                old_names = {x["name"] for x in r["extSubs"]}
+                emb = r.get("embSubs") or [x for x in r.get("subs", []) if x not in old_names]
+                r["embSubs"], r["extSubs"] = emb, ext
+                r["subs"] = list(dict.fromkeys(emb + [x["name"] for x in ext]))
+                changed = True
+                log.info("legendas de %s: %s", r["file"], [x["name"] for x in ext])
+        if changed:
             self.save()
         old = [fid for fid, r in self.files.items() if not r.get("broken") and r.get("v", 1) < PROBE_VERSION]
         for fid in old:
