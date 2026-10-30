@@ -151,7 +151,9 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
             String local = "http://127.0.0.1:" + CacheServer.PORT + "/stream/" + session + "/" + Uri.encode(o.getString("file"));
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             lastSent = -1;
-            player.open(o.getString("id"), local, o.optLong("pos", 0));
+            String[] subs = new String[o.optInt("subs", 0)];
+            for (int i = 0; i < subs.length; i++) subs[i] = base + "/sub/" + o.getString("id") + "/" + i;
+            player.open(o.getString("id"), local, o.optLong("pos", 0), subs);
         } catch (Exception e) {
             web.evaluateJavascript("toast('Não consegui abrir o filme')", null);
         }

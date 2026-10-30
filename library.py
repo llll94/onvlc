@@ -57,7 +57,7 @@ TMDB = "https://api.themoviedb.org/3"
 TMDB_IMG = "https://image.tmdb.org/t/p/"
 log = logging.getLogger("onvlc.lib")
 
-PROBE_VERSION = 2  # sobe quando o probe passa a ler algo novo: os vídeos já guardados são lidos de novo
+PROBE_VERSION = 3  # sobe quando o probe passa a ler algo novo: os vídeos já guardados são lidos de novo
 # capítulo sem nome de verdade: "00:12:30.000", "Chapter 05", "Capítulo 5" (mesma regra do main.py)
 GENERIC_CHAPTER = re.compile(r"^\s*((chapter|chap|cap[ií]tulo|cap)\.?\s*\d+|\d{1,2}(:\d{2}){1,2}([.,]\d+)?)\s*$", re.I)
 
@@ -131,18 +131,85 @@ def probe(path):
             audio.append(" ".join(x for x in (lang or "Áudio", ch) if x))
         elif s.get("codec_type") == "subtitle":
             subs.append(lang or "Legenda")
-    stem = Path(path).with_suffix("")
-    for ext in (".srt", ".ass", ".ssa", ".vtt"):
-        for f in stem.parent.glob(glob_escape(stem.name) + "*" + ext):
-            tag = f.stem[len(stem.name):].strip(".").lower()
-            subs.append(LANG.get(tag.split("-")[0], "Legenda") + " (arquivo)")
+    ext_subs = find_subs(path)
+    subs += [x["name"] for x in ext_subs]
     chapters = []
     for c in data.get("chapters", []):
         title = ((c.get("tags") or {}).get("title") or "").strip()
         chapters.append({"start": round(float(c.get("start_time") or 0), 2),
                          "title": "" if GENERIC_CHAPTER.match(title) else title})
     return {"dur": dur, "quality": q, "audio": list(dict.fromkeys(audio)), "subs": list(dict.fromkeys(subs)),
-            "chapters": chapters, "v": PROBE_VERSION}
+            "chapters": chapters, "extSubs": ext_subs, "v": PROBE_VERSION}
+
+
+SUB_EXTS = {".srt", ".ass", ".ssa", ".vtt"}
+SUB_DIRS = {"subs", "sub", "legendas", "legenda", "subtitles"}
+
+
+def find_subs(path):
+    """Legendas em arquivo ao lado do vídeo e nas pastas Subs/Legendas. Com um vídeo só na pasta, todas são dele."""
+    video = Path(path)
+    folder = video.parent
+    alone = sum(1 for f in folder.iterdir() if f.suffix.lower() in VIDEO_EXTS and not is_sample(f)) <= 1
+    found = []
+    for d in [folder] + [x for x in folder.iterdir() if x.is_dir() and x.name.lower() in SUB_DIRS]:
+        for f in sorted(d.iterdir()):
+            if f.suffix.lower() not in SUB_EXTS:
+                continue
+            if not alone and d == folder and not f.name.lower().startswith(video.stem.lower()):
+                continue
+            found.append({"path": str(f), "name": sub_label(f, video)})
+    seen = {}
+    for x in found:  # nomes repetidos ganham um número: "Inglês", "Inglês 2"
+        seen[x["name"]] = seen.get(x["name"], 0) + 1
+        if seen[x["name"]] > 1:
+            x["name"] += f" {seen[x['name']]}"
+    return found
+
+
+# palavras bem comuns de cada idioma, para quando o nome do arquivo não diz qual é
+WORDS = {"Português": {"você", "não", "está", "que", "uma", "isso", "por", "com", "é", "meu", "mas"},
+         "Inglês": {"the", "you", "and", "is", "to", "what", "this", "it", "of", "that", "i'm"},
+         "Espanhol": {"que", "no", "el", "la", "es", "usted", "qué", "por", "una", "está", "pero"}}
+
+
+def sniff_lang(path):
+    try:
+        raw = Path(path).read_bytes()[:20000]
+    except OSError:
+        return None
+    text = raw.decode("utf-8", "replace") if _utf8(raw) else raw.decode("cp1252", "replace")
+    words = re.findall(r"[a-zà-ú']+", text.lower())
+    score = {k: sum(w in v for w in words) for k, v in WORDS.items()}
+    best = max(score, key=score.get)
+    return best if score[best] >= 15 else None
+
+
+def _utf8(raw):
+    try:
+        raw.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
+def sub_label(f, video):
+    rest = f.stem[len(video.stem):] if f.stem.lower().startswith(video.stem.lower()) else f.stem
+    sdh = " (SDH)" if "sdh" in f.stem.lower() else ""
+    for tok in reversed(re.split(r"[\s._\-\[\]()]+", rest.lower())):
+        if tok in LANG:
+            return LANG[tok] + sdh
+        if tok in ("portuguese", "portugues", "português", "brazilian", "ptbr"):
+            return "Português" + sdh
+        if tok in ("english", "british"):
+            return "Inglês" + sdh
+    return (sniff_lang(f) or "Legenda") + sdh
+
+
+def is_sample(p):
+    """Amostra que vem junto no download (pasta Sample ou "sample" no nome)."""
+    p = Path(p)
+    return p.parent.name.lower() == "sample" or re.search(r"(^|[\W_])sample([\W_]|$)", p.stem, re.I) is not None
 
 
 def glob_escape(s):
@@ -307,7 +374,7 @@ class Library:
                     st = p.stat()
                 except OSError:
                     continue
-                if st.st_size >= MIN_SIZE:
+                if st.st_size >= MIN_SIZE and not is_sample(p):
                     found[str(p)] = (st.st_size, int(st.st_mtime))
         with self.lock:
             known = {r["path"]: fid for fid, r in self.files.items()}
@@ -459,6 +526,12 @@ class Library:
             self.thumbs.start(r["path"], r["dur"])
         return {"n": self.thumbs.n, "have": sorted(self.thumbs.have)}
 
+    def sub_file(self, fid, n):
+        with self.lock:
+            r = self.files.get(fid)
+        subs = (r or {}).get("extSubs") or []
+        return subs[n]["path"] if 0 <= n < len(subs) else None
+
     def thumb_file(self, fid, i):
         if self.thumbs_id != fid or i not in self.thumbs.have:
             return None
@@ -488,6 +561,7 @@ class Library:
 def _common(r):
     return {"file": r["file"], "size": r["size"], "dur": r.get("dur", 0), "pos": r.get("pos", 0),
             "chapters": r.get("chapters", []),
+            "extSubs": [{"n": i, "name": x["name"]} for i, x in enumerate(r.get("extSubs") or [])],
             "quality": r.get("quality", ""), "audio": r.get("audio", []), "subs": r.get("subs", []),
             "broken": bool(r.get("broken")), "added": r["added"],
             "bps": int(r["size"] * 8 / r["dur"]) if r.get("dur") else 0}
@@ -536,6 +610,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"app": "onvlc-library", "name": socket.gethostname(), "version": 1})
         if path == "/api/library":
             return self._send(200, self.lib.listing())
+        m = re.match(r"^/sub/([0-9a-f]+)/(\d+)$", path)
+        if m:
+            f = self.lib.sub_file(m.group(1), int(m.group(2)))
+            if f and os.path.isfile(f):
+                return self._send(200, Path(f).read_bytes(), "text/plain; charset=utf-8")
+            return self._send(404, b"", "text/plain")
         m = re.match(r"^/api/thumbs/([0-9a-f]+)$", path)
         if m:
             return self._send(200, self.lib.thumbs_for(m.group(1)))

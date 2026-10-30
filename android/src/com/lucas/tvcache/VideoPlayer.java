@@ -15,6 +15,7 @@ import org.json.JSONObject;
 import org.videolan.libvlc.LibVLC;
 import org.videolan.libvlc.Media;
 import org.videolan.libvlc.MediaPlayer;
+import org.videolan.libvlc.interfaces.IMedia;
 import org.videolan.libvlc.interfaces.IVLCVout;
 
 import java.util.ArrayList;
@@ -67,7 +68,7 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
         return id;
     }
 
-    void open(String fileId, String url, long posMs) {
+    void open(String fileId, String url, long posMs, String[] subtitles) {
         if (lib == null) {
             ArrayList<String> opts = new ArrayList<>();
             opts.add("--audio-time-stretch");
@@ -89,7 +90,11 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
         box.post(() -> mp.getVLCVout().setWindowSize(box.getWidth(), box.getHeight()));
         Media m = new Media(lib, Uri.parse(url));
         m.setHWDecoderEnabled(true, false);
-        m.addOption(":network-caching=1500");
+        // o vídeo já vem do cache local (127.0.0.1): uma reserva curta basta e o filme começa antes
+        m.addOption(":network-caching=400");
+        for (String sub : subtitles) {  // legendas em arquivo, servidas pelo PC (entram depois das do próprio vídeo)
+            m.addSlave(new IMedia.Slave(IMedia.Slave.Type.Subtitle, 0, sub));
+        }
         if (posMs > 0) m.addOption(":start-time=" + (posMs / 1000.0));
         mp.setMedia(m);
         m.release();

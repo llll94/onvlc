@@ -56,11 +56,12 @@ const plRealButtons = () => plButtons().filter(b => !b.sp);
 function openPlayer(it, posMs) {
   clearTimeout(loadTimer);
   Object.assign(PL, { open: true, it, st: { state: "opening", time: posMs / 1000, length: it.dur, buffering: 0 }, ui: true, focus: "bar", btn: 0,
-    scrub: null, panel: null, pausedSince: 0, next: null, nextOff: false, thumbs: { n: 0, have: [] } });
+    scrub: null, panel: null, pausedSince: 0, next: null, nextOff: false, thumbs: { n: 0, have: [] }, subPicked: false });
   document.documentElement.classList.add("playing");
   plBuild();
   const title = it.kind === "episode" ? `${it.show.title} · ${epLabel(it)} · ${it.title}` : it.title;
-  window.onvlc.play(JSON.stringify({ id: it.id, size: it.size, file: it.file, title, pos: posMs, bps: it.bps }));
+  window.onvlc.play(JSON.stringify({ id: it.id, size: it.size, file: it.file, title, pos: posMs, bps: it.bps,
+    subs: (it.extSubs || []).length }));
   plPoke();
   plLoadThumbs();
 }
@@ -106,6 +107,7 @@ window.onPlayer = st => {
     if (PL.next === null) { PL.next = nx; PL.btn = 0; plRenderNext(); }
     else plUpdateNext(left);
   }
+  if (st.state === "playing") plAutoSub();
   plUpdate();
 };
 
@@ -222,7 +224,22 @@ function plUpdate() {
 
 // ---------- painéis ----------
 function plAudioList() { return (PL.st.audio || []).filter(a => a.id >= 0); }
-function plSpuList() { return (PL.st.spu || []).map(s => s.id < 0 ? { id: s.id, name: "Desligadas" } : s); }
+// os nomes que a biblioteca deu ("Português", "Inglês (SDH)") no lugar dos do motor ("Track 3 - [English]"):
+// o motor lista as do vídeo na ordem do arquivo e depois as de arquivo .srt, na ordem em que foram passadas
+function plSpuList() {
+  const list = (PL.st.spu || []).filter(s => s.id >= 0), names = PL.it.subs || [];
+  const named = list.length === names.length ? list.map((s, k) => ({ id: s.id, name: names[k] })) : list;
+  return [{ id: -1, name: "Desligadas" }, ...named];
+}
+// filme em outra língua com legenda em português: já começa com ela
+function plAutoSub() {
+  if (PL.subPicked || !(PL.st.spu || []).length || !(PL.st.audio || []).length) return;
+  PL.subPicked = true;
+  const audio = ((PL.st.audio || []).find(a => a.id === PL.st.audioId) || {}).name || "";
+  if (/portugu|\[por\]|\bpt\b/i.test(audio)) return;
+  const pt = plSpuList().find(s => s.id >= 0 && /^Português/.test(s.name));
+  if (pt && pt.id !== PL.st.spuId) { window.onvlc.spu(pt.id); PL.st.spuId = pt.id; }
+}
 function plRenderPanel() {
   const p = $("pl-panel");
   p.classList.toggle("on", PL.panel === "tracks");
