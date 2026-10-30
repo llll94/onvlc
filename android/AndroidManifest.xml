@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- TV Cache: fica entre o PC e o VLC da Mi Box, guardando uma janela do filme em volta do ponto que está tocando -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.lucas.tvcache"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <application
+        android:label="TV Cache"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="true">
+
+        <!-- aberta pelo PC via adb; não tem tela, só prepara o cache e abre o VLC -->
+        <activity
+            android:name=".PlayActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay" />
+
+        <service
+            android:name=".CacheService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+    </application>
+</manifest>
