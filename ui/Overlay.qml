@@ -648,8 +648,9 @@ Item {
                 topPadding: 4
                 spacing: 6
                 readonly property int ci: root.chapAt(s.pos || 0)
-                Text { text: "Capítulo " + (parent.ci + 1) + " ·"; color: Qt.rgba(1, 1, 1, 0.7); font.family: root.uiFont; font.pixelSize: 14 }
-                Text { text: root.chapters[parent.ci] ? root.chapters[parent.ci].name : ""; color: root.orange; font.family: root.uiFont; font.pixelSize: 14; font.weight: Font.DemiBold }
+                readonly property string cname: root.chapters[ci] ? root.chapters[ci].name : ""
+                Text { text: "Capítulo " + (parent.ci + 1) + (parent.cname ? " ·" : ""); color: Qt.rgba(1, 1, 1, 0.7); font.family: root.uiFont; font.pixelSize: 14 }
+                Text { visible: parent.cname !== ""; text: parent.cname; color: root.orange; font.family: root.uiFont; font.pixelSize: 14; font.weight: Font.DemiBold }
             }
             Item { width: 1; height: 12 }
 
@@ -706,23 +707,40 @@ Item {
                         scale: tl.hovering ? 1 : 0.75
                         Behavior on scale { NumberAnimation { duration: 120 } }
                     }
+                    // prévia ao passar o mouse: miniatura (quando já existe) + capítulo + horário
                     Rectangle {
+                        id: tip
                         visible: tl.hovering && root.hoverP >= 0 && root.dur > 0
-                        width: tipRow.implicitWidth + 16; height: 28; radius: 7
+                        readonly property string thumb: visible ? player.thumbAt(root.hoverP * root.dur) : ""
+                        readonly property int ci: root.chapAt(root.hoverP * root.dur)
+                        width: Math.max(thumb ? 248 : 0, tipRow.implicitWidth + 16)
+                        height: (thumb ? thumbImg.height + 4 : 0) + 28
+                        radius: 7
                         color: root.panelBg
                         border.color: root.line
-                        y: -36
+                        y: -height - 8
                         x: Math.max(0, Math.min(tl.width - width, root.hoverP * tl.width - width / 2))
+                        Image {
+                            id: thumbImg
+                            visible: tip.thumb !== ""
+                            source: tip.thumb
+                            anchors { top: parent.top; topMargin: 4; horizontalCenter: parent.horizontalCenter }
+                            width: 240
+                            height: status === Image.Ready ? Math.round(240 * implicitHeight / Math.max(1, implicitWidth)) : 135
+                            fillMode: Image.PreserveAspectFit
+                        }
                         Row {
                             id: tipRow
-                            anchors.centerIn: parent
+                            anchors { bottom: parent.bottom; horizontalCenter: parent.horizontalCenter }
+                            height: 28
                             spacing: 8
                             Text {
                                 visible: root.chapters.length > 1
-                                text: root.chapters[root.chapAt(root.hoverP * root.dur)] ? root.chapters[root.chapAt(root.hoverP * root.dur)].name : ""
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: root.chapters[tip.ci] ? (root.chapters[tip.ci].name || "Capítulo " + (tip.ci + 1)) : ""
                                 color: "white"; font.family: root.uiFont; font.pixelSize: 12; font.weight: Font.DemiBold
                             }
-                            Text { text: root.fmt(root.hoverP * root.dur); color: "white"; font.family: root.monoFont; font.pixelSize: 12 }
+                            Text { anchors.verticalCenter: parent.verticalCenter; text: root.fmt(root.hoverP * root.dur); color: "white"; font.family: root.monoFont; font.pixelSize: 12 }
                         }
                     }
                     MouseArea {

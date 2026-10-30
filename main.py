@@ -26,6 +26,7 @@ from PySide6.QtQuick import QQuickView, QQuickWindow, QSGRendererInterface  # no
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget  # noqa: E402
 
 import opensubs  # noqa: E402
+import thumbs  # noqa: E402
 import tvfolder  # noqa: E402
 import tvstream  # noqa: E402
 
@@ -44,6 +45,8 @@ SUB_EXTS = {".srt", ".ass", ".ssa", ".vtt", ".sub"}
 SUB_DIRS = ["", "Subs", "Sub", "Legendas", "Legenda", "Subtitles"]
 ASPECTS = [None, "16:9", "4:3", "21:9", "1:1"]
 RATES = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+# capítulo sem nome de verdade: "00:12:30.000", "Chapter 05", "Capítulo 5"
+GENERIC_CHAPTER = re.compile(r"^\s*((chapter|chap|cap[ií]tulo|cap)\.?\s*\d+|\d{1,2}(:\d{2}){1,2}([.,]\d+)?)\s*$", re.I)
 
 
 def _dec(x):
@@ -118,6 +121,8 @@ class Player(QObject):
         self.pending_resume = None
         self.ticks = 0
         self.os_client = None
+        self.thumbs = thumbs.Thumbs()
+        self.thumbs_for = None
         self._webResult.connect(self._on_web)
         self.st = {"tv": {}}
         self._reset_media_state()
@@ -223,6 +228,9 @@ class Player(QObject):
             dur = mp.get_length() / 1000
             if dur > 0:
                 self.st["dur"] = dur
+                if self.thumbs_for != self.path:
+                    self.thumbs_for = self.path
+                    self.thumbs.start(self.path, dur)
                 if self.pending_resume is not None:
                     at = self.pending_resume
                     self.pending_resume = None
@@ -252,12 +260,18 @@ class Player(QObject):
             pass
         if not self.st["chapters"] and self.st["dur"] > 0:
             try:
-                chs = mp.get_full_chapter_descriptions(-1) or []
-                self.st["chapters"] = [{"name": _dec(c.name) if c.name else f"Capítulo {k + 1}",
-                                        "start": c.time_offset / 1000} for k, c in enumerate(chs)]
+                chs = list(mp.get_full_chapter_descriptions(-1) or [])
+                names = [_dec(c.name) if c.name else "" for c in chs]
+                self.st["chapters"] = [{"name": "" if GENERIC_CHAPTER.match(n) else n,
+                                        "start": c.time_offset / 1000} for n, c in zip(names, chs)]
             except Exception:
                 pass
         self.st["badge"] = bool(self.st["found"]) and self.st["subId"] == -1
+
+    @Slot(float, result=str)
+    def thumbAt(self, sec):
+        f = self.thumbs.at(sec)
+        return QUrl.fromLocalFile(f).toString() if f else ""
 
     @staticmethod
     def _fmt(s):
