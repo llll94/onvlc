@@ -13,20 +13,15 @@ import android.webkit.WebViewClient;
 
 import org.json.JSONObject;
 
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 
 /**
  * A biblioteca na tela inicial da Mi Box: uma página (pasta tvui do PC) dentro de um WebView.
  * A página passa pelo servidor local do cache (127.0.0.1:8090/ui/), que guarda uma cópia para
- * mostrar a última lista mesmo com o PC desligado. Tocar abre o VLC e, quando ele fecha,
- * a posição volta para o PC (a mesma do onVLC de lá).
+ * mostrar a última lista mesmo com o PC desligado. Tocar abre o VLC; enquanto ele toca, a posição
+ * vai para o PC (a mesma do onVLC de lá), pela classe Progress.
  */
 public class LibraryActivity extends Activity {
-    private static final int REQ_VLC = 1;
     private WebView web;
-    private String playingId;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -101,44 +96,13 @@ public class LibraryActivity extends Activity {
             vlc.setDataAndType(target, "video/*");
             vlc.putExtra("position", o.optLong("pos", 0));
             vlc.putExtra("title", o.optString("title", ""));
-            playingId = o.getString("id");
-            startActivityForResult(vlc, REQ_VLC);
+            // tarefa própria, como no Assistir na TV do PC: aberto "para resultado", o VLC se reabre em outra
+            // tarefa e devolve na hora, e o cache era desligado com o filme começando
+            vlc.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(vlc);
+            Progress.track(this, base, o.getString("id"));
         } catch (Exception e) {
             web.evaluateJavascript("toast('Não consegui abrir o VLC')", null);
         }
-    }
-
-    @Override
-    protected void onActivityResult(int req, int result, Intent data) {
-        super.onActivityResult(req, result, data);
-        if (req != REQ_VLC || playingId == null) return;
-        final String id = playingId;
-        playingId = null;
-        long pos = data != null ? data.getLongExtra("extra_position", -1) : -1;
-        long dur = data != null ? data.getLongExtra("extra_duration", 0) : 0;
-        stopService(new Intent(this, CacheService.class));
-        if (pos < 0) return;
-        final double posS = pos / 1000.0, durS = dur / 1000.0;
-        final String base = PcFinder.base();
-        if (base == null) return;
-        new Thread(() -> {
-            try {
-                HttpURLConnection c = (HttpURLConnection) new URL(base + "/api/progress").openConnection();
-                c.setConnectTimeout(3000);
-                c.setReadTimeout(5000);
-                c.setRequestMethod("POST");
-                c.setDoOutput(true);
-                c.setRequestProperty("Content-Type", "application/json");
-                byte[] body = new JSONObject().put("id", id).put("pos", posS).put("dur", durS).toString().getBytes("UTF-8");
-                try (OutputStream out = c.getOutputStream()) {
-                    out.write(body);
-                }
-                c.getResponseCode();
-                c.disconnect();
-            } catch (Exception e) {
-                // o PC desligou no meio: a posição fica só no VLC da TV
-            }
-            runOnUiThread(() -> web.evaluateJavascript("window.tvRefresh && tvRefresh()", null));
-        }, "progress").start();
     }
 }

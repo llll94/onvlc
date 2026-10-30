@@ -3,7 +3,7 @@
      da TV, guardando uma janela do filme em volta do ponto que está tocando -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.lucas.tvcache"
-    android:versionCode="2"
+    android:versionCode="3"
     android:versionName="2.0">
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
@@ -43,6 +43,16 @@
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:theme="@android:style/Theme.NoDisplay" />
+
+        <!-- só para poder ler a posição do VLC pelo controle de mídia (ver Listener.java) -->
+        <service
+            android:name=".Listener"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
         <service
             android:name=".CacheService"
