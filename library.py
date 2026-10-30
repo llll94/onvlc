@@ -57,6 +57,10 @@ TMDB = "https://api.themoviedb.org/3"
 TMDB_IMG = "https://image.tmdb.org/t/p/"
 log = logging.getLogger("onvlc.lib")
 
+PROBE_VERSION = 2  # sobe quando o probe passa a ler algo novo: os vídeos já guardados são lidos de novo
+# capítulo sem nome de verdade: "00:12:30.000", "Chapter 05", "Capítulo 5" (mesma regra do main.py)
+GENERIC_CHAPTER = re.compile(r"^\s*((chapter|chap|cap[ií]tulo|cap)\.?\s*\d+|\d{1,2}(:\d{2}){1,2}([.,]\d+)?)\s*$", re.I)
+
 LANG = {"por": "Português", "pt": "Português", "pob": "Português", "eng": "Inglês", "en": "Inglês",
         "spa": "Espanhol", "es": "Espanhol", "fre": "Francês", "fra": "Francês", "fr": "Francês",
         "ita": "Italiano", "it": "Italiano", "ger": "Alemão", "deu": "Alemão", "de": "Alemão",
@@ -105,7 +109,7 @@ def probe(path):
     try:
         out = subprocess.run([exe, "-v", "error", "-show_entries",
                               "format=duration:stream=codec_type,height,width,channels,color_transfer"
-                              ":stream_tags=language", "-of", "json", str(path)],
+                              ":stream_tags=language", "-show_chapters", "-of", "json", str(path)],
                              capture_output=True, timeout=60, creationflags=tvfolder.NO_WINDOW)
         data = json.loads(out.stdout or b"{}")
     except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -132,7 +136,13 @@ def probe(path):
         for f in stem.parent.glob(glob_escape(stem.name) + "*" + ext):
             tag = f.stem[len(stem.name):].strip(".").lower()
             subs.append(LANG.get(tag.split("-")[0], "Legenda") + " (arquivo)")
-    return {"dur": dur, "quality": q, "audio": list(dict.fromkeys(audio)), "subs": list(dict.fromkeys(subs))}
+    chapters = []
+    for c in data.get("chapters", []):
+        title = ((c.get("tags") or {}).get("title") or "").strip()
+        chapters.append({"start": round(float(c.get("start_time") or 0), 2),
+                         "title": "" if GENERIC_CHAPTER.match(title) else title})
+    return {"dur": dur, "quality": q, "audio": list(dict.fromkeys(audio)), "subs": list(dict.fromkeys(subs)),
+            "chapters": chapters, "v": PROBE_VERSION}
 
 
 def glob_escape(s):
@@ -259,6 +269,8 @@ class Library:
         self.seen = {}  # caminho → (tamanho, mtime) da última olhada: só processa depois de parar de crescer
         self.busy = 0
         self.tmdb = Tmdb()
+        self.thumbs = thumbs.Thumbs()
+        self.thumbs_id = None
         try:
             data = json.loads(INDEX.read_text(encoding="utf-8"))
             self.files, self.shows = data.get("files", {}), data.get("shows", {})
@@ -314,6 +326,14 @@ class Library:
         self.busy = len(todo)
         if gone:
             self._drop_empty_shows()
+            self.save()
+        old = [fid for fid, r in self.files.items() if not r.get("broken") and r.get("v", 1) < PROBE_VERSION]
+        for fid in old:
+            r = self.files.get(fid)
+            info = probe(r["path"]) if r else None
+            if info:
+                r.update(info)
+        if old:
             self.save()
         retry = [fid for fid, r in self.files.items() if self.tmdb.token and not r.get("tmdbTried")]
         for path, sig in todo:
@@ -428,6 +448,22 @@ class Library:
                 "shows": sorted(out_shows.values(), key=lambda o: -o["added"]),
                 "continue": [fid for _, fid in sorted(progress, reverse=True)]}
 
+    def thumbs_for(self, fid):
+        """Começa (ou continua) as miniaturas do vídeo que a TV abriu; devolve as que já existem."""
+        with self.lock:
+            r = self.files.get(fid)
+        if not r or not r.get("dur"):
+            return {"n": 0, "have": []}
+        if self.thumbs_id != fid:
+            self.thumbs_id = fid
+            self.thumbs.start(r["path"], r["dur"])
+        return {"n": self.thumbs.n, "have": sorted(self.thumbs.have)}
+
+    def thumb_file(self, fid, i):
+        if self.thumbs_id != fid or i not in self.thumbs.have:
+            return None
+        return self.thumbs.dir / f"{i}.jpg"
+
     def path_of(self, fid):
         with self.lock:
             r = self.files.get(fid)
@@ -451,6 +487,7 @@ class Library:
 
 def _common(r):
     return {"file": r["file"], "size": r["size"], "dur": r.get("dur", 0), "pos": r.get("pos", 0),
+            "chapters": r.get("chapters", []),
             "quality": r.get("quality", ""), "audio": r.get("audio", []), "subs": r.get("subs", []),
             "broken": bool(r.get("broken")), "added": r["added"],
             "bps": int(r["size"] * 8 / r["dur"]) if r.get("dur") else 0}
@@ -499,6 +536,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"app": "onvlc-library", "name": socket.gethostname(), "version": 1})
         if path == "/api/library":
             return self._send(200, self.lib.listing())
+        m = re.match(r"^/api/thumbs/([0-9a-f]+)$", path)
+        if m:
+            return self._send(200, self.lib.thumbs_for(m.group(1)))
+        m = re.match(r"^/img/thumb_([0-9a-f]+)_(\d+)\.jpg$", path)
+        if m:
+            f = self.lib.thumb_file(m.group(1), int(m.group(2)))
+            if f and f.is_file():
+                return self._send(200, f.read_bytes(), "image/jpeg", "public, max-age=86400")
+            return self._send(404, b"", "text/plain")
         m = re.match(r"^/img/([A-Za-z0-9_.-]+)$", path)
         if m:
             f = IMG_DIR / m.group(1)

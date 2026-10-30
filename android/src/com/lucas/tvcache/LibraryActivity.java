@@ -6,41 +6,52 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.KeyEvent;
+import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 
 import org.json.JSONObject;
-
 
 /**
  * A biblioteca na tela inicial da Mi Box: uma página (pasta tvui do PC) dentro de um WebView.
  * A página passa pelo servidor local do cache (127.0.0.1:8090/ui/), que guarda uma cópia para
- * mostrar a última lista mesmo com o PC desligado. Tocar abre o VLC; enquanto ele toca, a posição
- * vai para o PC (a mesma do onVLC de lá), pela classe Progress.
+ * mostrar a última lista mesmo com o PC desligado.
+ *
+ * O filme toca aqui mesmo (VideoPlayer, motor do VLC) numa superfície atrás da página; a página
+ * fica transparente e desenha a barra e os menus por cima. A posição vai para o PC a cada 10 s e ao parar.
  */
-public class LibraryActivity extends Activity {
+public class LibraryActivity extends Activity implements VideoPlayer.Listener {
     private WebView web;
+    private VideoPlayer player;
+    private String base;  // o PC do filme que está tocando
+    private double lastSent = -1;
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        WebView.setWebContentsDebuggingEnabled(true);  // o PC mexe na página pelo adb (tools\tvjs.py)
         PcFinder.search(this);
         try {
             CacheServer.get(this).startUi();
         } catch (Exception e) {
             // a porta já está aberta por este mesmo app
         }
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.parseColor("#0b0b0c"));
         web = new WebView(this);
-        web.setBackgroundColor(Color.parseColor("#0b0b0c"));
+        web.setBackgroundColor(Color.TRANSPARENT);  // o vídeo aparece por baixo quando a página deixa
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
         web.setWebViewClient(new WebViewClient());
         web.addJavascriptInterface(new Bridge(), "onvlc");
-        setContentView(web);
+        root.addView(web, new FrameLayout.LayoutParams(-1, -1));
+        player = new VideoPlayer(this, root, this);
+        setContentView(root);
         web.requestFocus();
         // espera um instante pela busca do PC para a primeira tela já vir com a lista nova
         web.postDelayed(() -> web.loadUrl("http://127.0.0.1:" + CacheServer.PORT + "/ui/index.html"), 1200);
@@ -55,9 +66,16 @@ public class LibraryActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
+        int k = e.getKeyCode();
         // o botão "voltar" do controle chega aqui antes do WebView
-        if (e.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+        if (k == KeyEvent.KEYCODE_BACK) {
             if (e.getAction() == KeyEvent.ACTION_UP) onBackPressed();
+            return true;
+        }
+        // botões de mídia do controle viram teclas que a página entende
+        if (player.active() && (k == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || k == KeyEvent.KEYCODE_MEDIA_PLAY
+                || k == KeyEvent.KEYCODE_MEDIA_PAUSE)) {
+            if (e.getAction() == KeyEvent.ACTION_UP) player.toggle();
             return true;
         }
         return super.dispatchKeyEvent(e);
@@ -66,7 +84,23 @@ public class LibraryActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (web != null) web.evaluateJavascript("window.tvRefresh && tvRefresh()", null);
+        if (web != null && !player.active()) web.evaluateJavascript("window.tvRefresh && tvRefresh()", null);
+    }
+
+    @Override
+    protected void onPause() {
+        // saiu para a tela inicial no meio do filme: para e guarda a posição
+        if (player.active()) {
+            player.stop(true);
+            web.evaluateJavascript("window.onPlayerClosed && onPlayerClosed()", null);
+        }
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        player.release();
+        super.onDestroy();
     }
 
     private final class Bridge {
@@ -74,12 +108,37 @@ public class LibraryActivity extends Activity {
         public void play(final String json) {
             runOnUiThread(() -> startPlay(json));
         }
+
+        @JavascriptInterface
+        public void toggle() {
+            runOnUiThread(() -> player.toggle());
+        }
+
+        @JavascriptInterface
+        public void seek(final double sec) {
+            runOnUiThread(() -> player.seek((long) (sec * 1000)));
+        }
+
+        @JavascriptInterface
+        public void audio(final int track) {
+            runOnUiThread(() -> player.setAudio(track));
+        }
+
+        @JavascriptInterface
+        public void spu(final int track) {
+            runOnUiThread(() -> player.setSpu(track));
+        }
+
+        @JavascriptInterface
+        public void stop() {
+            runOnUiThread(() -> player.stop(true));
+        }
     }
 
     private void startPlay(String json) {
         try {
             JSONObject o = new JSONObject(json);
-            String base = PcFinder.base();
+            base = PcFinder.base();
             if (base == null) {
                 web.evaluateJavascript("toast('Não achei o PC na rede. Ele está ligado com o onVLC aberto?')", null);
                 PcFinder.lost(this);
@@ -88,21 +147,42 @@ public class LibraryActivity extends Activity {
             String upstream = base + "/v/" + o.getString("id") + "/" + o.getLong("size") + "/" + Uri.encode(o.getString("file"));
             CacheServer.get(this).open(upstream, o.optLong("bps", 0));
             startForegroundService(new Intent(this, CacheService.class));
-            // código novo a cada vez: o VLC respeita a posição pedida (num endereço conhecido ele retoma sozinho)
             String session = Long.toHexString(System.nanoTime());
-            Uri target = Uri.parse("http://127.0.0.1:" + CacheServer.PORT + "/stream/" + session + "/" + Uri.encode(o.getString("file")));
-            Intent vlc = new Intent(Intent.ACTION_VIEW);
-            vlc.setClassName("org.videolan.vlc", "org.videolan.vlc.gui.video.VideoPlayerActivity");
-            vlc.setDataAndType(target, "video/*");
-            vlc.putExtra("position", o.optLong("pos", 0));
-            vlc.putExtra("title", o.optString("title", ""));
-            // tarefa própria, como no Assistir na TV do PC: aberto "para resultado", o VLC se reabre em outra
-            // tarefa e devolve na hora, e o cache era desligado com o filme começando
-            vlc.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(vlc);
-            Progress.track(this, base, o.getString("id"));
+            String local = "http://127.0.0.1:" + CacheServer.PORT + "/stream/" + session + "/" + Uri.encode(o.getString("file"));
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            lastSent = -1;
+            player.open(o.getString("id"), local, o.optLong("pos", 0));
         } catch (Exception e) {
-            web.evaluateJavascript("toast('Não consegui abrir o VLC')", null);
+            web.evaluateJavascript("toast('Não consegui abrir o filme')", null);
+        }
+    }
+
+    // ---------- VideoPlayer.Listener ----------
+    @Override
+    public void onState(JSONObject st) {
+        try {
+            st.put("cache", new JSONObject(CacheServer.get(this).statusJson()));
+        } catch (Exception e) {
+            // sem cache: só o estado do player
+        }
+        web.evaluateJavascript("window.onPlayer && onPlayer(" + st + ")", null);
+        double t = st.optDouble("time", 0);
+        if ("playing".equals(st.optString("state")) && Math.abs(t - lastSent) >= 10 && base != null) {
+            lastSent = t;
+            Progress.post(base, st.optString("id"), t, st.optDouble("length", 0));
+        }
+    }
+
+    @Override
+    public void onStopped(String id, double pos, double dur, boolean ended) {
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        stopService(new Intent(this, CacheService.class));
+        final String b = base;
+        if (b != null) {
+            new Thread(() -> {
+                Progress.send(b, id, pos, dur);
+                runOnUiThread(() -> web.evaluateJavascript("window.tvRefresh && tvRefresh()", null));
+            }, "progress").start();
         }
     }
 }

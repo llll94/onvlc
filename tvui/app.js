@@ -344,16 +344,15 @@ function play(it, fromStart) {
   if (OFFLINE) return toast("O PC está desligado. Abra o onVLC no PC e tente de novo.", 3500);
   const pos = fromStart ? 0 : (it.pos || 0);
   const title = it.kind === "episode" ? `${it.show.title} · ${epLabel(it)} · ${it.title}` : it.title;
-  const req = { id: it.id, size: it.size, file: it.file, title, pos: Math.round(pos * 1000), bps: it.bps };
   if (window.onvlc) {
-    toast("Abrindo no VLC…", 4000);
-    window.onvlc.play(JSON.stringify(req));
+    openPlayer(it, Math.round(pos * 1000));  // player.js: toca aqui mesmo, com o motor do VLC
   } else {
     toast(`Na TV, isto abre no VLC: ${title}${pos ? " em " + clock(pos) : ""}`, 3500);
   }
 }
 
 function back() {
+  if (PL.open) return plBack();
   if (stack.length) {
     const prev = stack.pop();
     screen = prev.screen;
@@ -379,6 +378,13 @@ window.tvRefresh = () => load();
 
 document.addEventListener("keydown", e => {
   const k = e.key;
+  if (PL.open) {
+    if (k === "Escape" || k === "Backspace" || k === "BrowserBack" || k === "GoBack") plBack();
+    else if (k.startsWith("Arrow") || k === "Enter" || k === " ") plKey(k);
+    else return;
+    e.preventDefault();
+    return;
+  }
   if (k === "ArrowLeft") move(-1, 0);
   else if (k === "ArrowRight") move(1, 0);
   else if (k === "ArrowUp") move(0, -1);
@@ -418,10 +424,10 @@ async function load() {
     LIB = JSON.parse(text);
     index();
     const key = current() && current().dataset.k;
-    render(key);
+    if (!PL.open) render(key);
   } else if (!LIB) {
     renderSearching();
-  } else if (OFFLINE !== wasOffline) {
+  } else if (OFFLINE !== wasOffline && !PL.open) {
     const key = current() && current().dataset.k;
     render(key);  // mostra ou tira o aviso de PC desligado
   }

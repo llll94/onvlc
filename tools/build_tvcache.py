@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -17,6 +18,30 @@ OUT = ROOT / "build" / "tvcache"
 SDK = Path(os.environ.get("ANDROID_HOME") or Path(os.environ["LOCALAPPDATA"]) / "Android" / "Sdk")
 PLATFORM, BUILD_TOOLS = "android-34", "34.0.0"
 BOX = "192.168.1.31:5555"
+# o motor do VLC (só o player, sem o app): baixado uma vez do repositório oficial da VideoLAN
+LIBVLC_VERSION = "3.7.7"
+LIBVLC_AAR = f"https://repo1.maven.org/maven2/org/videolan/android/libvlc-all/{LIBVLC_VERSION}/libvlc-all-{LIBVLC_VERSION}.aar"
+LIBVLC_DIR = ROOT / "build" / "libvlc"
+ABI = "armeabi-v7a"  # a Mi Box (32 bits)
+
+
+def libvlc():
+    """classes.jar e as bibliotecas nativas da Mi Box, tiradas do pacote oficial."""
+    LIBVLC_DIR.mkdir(parents=True, exist_ok=True)
+    aar = LIBVLC_DIR / f"libvlc-all-{LIBVLC_VERSION}.aar"
+    if not aar.exists():
+        print("› baixando o motor do VLC", LIBVLC_VERSION)
+        tmp = aar.with_suffix(".tmp")
+        urllib.request.urlretrieve(LIBVLC_AAR, tmp)
+        os.replace(tmp, aar)
+    out = LIBVLC_DIR / LIBVLC_VERSION
+    jar, libs = out / "classes.jar", out / "jni" / ABI
+    if not jar.exists():
+        with zipfile.ZipFile(aar) as z:
+            for n in z.namelist():
+                if n == "classes.jar" or (n.startswith(f"jni/{ABI}/") and n.endswith(".so")):
+                    z.extract(n, out)
+    return jar, sorted(libs.glob("*.so"))
 
 
 def java_home():
@@ -50,11 +75,15 @@ def main():
     classes.mkdir(parents=True)
     dex.mkdir()
 
+    vlc_jar, vlc_libs = libvlc()
     sources = [str(p) for p in (SRC / "src").rglob("*.java")]
     run(jdk / "bin" / "javac.exe", "-source", "8", "-target", "8", "-Xlint:-options", "-encoding", "UTF-8",
-        "-classpath", android_jar, "-d", classes, *sources)
+        "-classpath", f"{android_jar}{os.pathsep}{vlc_jar}", "-d", classes, *sources)
     class_files = [str(p) for p in classes.rglob("*.class")]
-    run(bt / "d8.bat", "--release", "--min-api", "26", "--lib", android_jar, "--output", dex, *class_files, env=env)
+    # o motor traz referências a bibliotecas do Android (androidx) só em partes que não usamos
+    # (transmitir para outro aparelho, tela externa): o d8 avisa e segue
+    run(bt / "d8.bat", "--release", "--min-api", "26", "--lib", android_jar, "--output", dex, *class_files, vlc_jar,
+        env=env, stderr=subprocess.DEVNULL)
 
     res_zip = OUT / "res.zip"
     run(bt / "aapt2.exe", "compile", "--dir", SRC / "res", "-o", res_zip)
@@ -64,8 +93,11 @@ def main():
     base = OUT / "base.apk"
     run(bt / "aapt2.exe", "link", "-o", base, "-I", android_jar, "--manifest", SRC / "AndroidManifest.xml",
         "--min-sdk-version", "26", "--target-sdk-version", "34", "-A", assets, res_zip)
-    with zipfile.ZipFile(base, "a") as z:
-        z.write(dex / "classes.dex", "classes.dex")
+    with zipfile.ZipFile(base, "a", zipfile.ZIP_DEFLATED) as z:
+        for d in sorted(dex.glob("classes*.dex")):
+            z.write(d, d.name)
+        for so in vlc_libs:
+            z.write(so, f"lib/{ABI}/{so.name}")
 
     aligned = OUT / "aligned.apk"
     run(bt / "zipalign.exe", "-f", "4", base, aligned)

@@ -538,6 +538,11 @@ final class CacheServer {
     }
 
     // ---------- status ----------
+    /** O mesmo JSON de /status, para o player da biblioteca mostrar quanto já está guardado. */
+    String statusJson() {
+        return status();
+    }
+
     private String status() {
         synchronized (lock) {
             long now = System.currentTimeMillis();
