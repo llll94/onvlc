@@ -244,7 +244,7 @@ function renderMovie(it, keepKey) {
       ${it.broken ? `<div class="note">O PC não consegue abrir este arquivo. Ele pode estar incompleto ou corrompido.</div>` : offlineNote()}
       <div class="btns">${btns.map((b, i) => `<div class="btn" data-k="b:${i}" data-b="${i}">${b.play ? '<span class="tri"></span>' : ""}${esc(b.label)}</div>`).join("")}</div>
       <dl class="facts">
-        <dt>Áudio</dt><dd>${esc(it.audio.join(" · ") || "—")}</dd>
+        <dt>Áudio</dt><dd>${esc([...new Set(it.audio)].join(" · ") || "—")}</dd>
         <dt>Legendas</dt><dd>${esc(it.subs.join(" · ") || "nenhuma")}</dd>
         <dt>Arquivo</dt><dd class="file">${esc(it.file)} · ${gb(it.size)}</dd>
       </dl></div></div>`;
@@ -252,6 +252,8 @@ function renderMovie(it, keepKey) {
   onFocus = () => {};
   zi = 0;
   setZones([[...view.querySelectorAll(".btn")]], keepKey);
+  plPrepare(it);
+  warm(it);
 }
 
 function renderShow(show, season, keepKey) {
@@ -287,6 +289,9 @@ function renderShow(show, season, keepKey) {
   const zs = [[...view.querySelectorAll(".btns .btn")], [...view.querySelectorAll(".seasons .btn")], [...view.querySelectorAll(".eps .card")]];
   zi = 0;
   setZones(zs, keepKey);
+  const primary = started || first;
+  plPrepare(primary);
+  warm(primary);
 }
 function episodeCard(e) {
   const src = e.still || e.show.backdrop || e.show.frame;
@@ -317,6 +322,7 @@ function activate() {
   const el = current();
   if (!el) return;
   if (el.dataset.tab !== undefined) {
+    plUnprepare();
     screen.tab = +el.dataset.tab;
     stack.length = 0;
     zi = 0;
@@ -339,6 +345,22 @@ function activate() {
   else renderShow(it, 0);
 }
 
+// ---------- kit de abertura ----------
+/* Ordem de prioridade para o app guardar o começo de cada vídeo na Mi Box: o que está na frente (página aberta),
+ * o "Continuar assistindo" (com o ponto onde parou), os adicionados por último, o resto. Séries: o episódio
+ * em andamento ou o primeiro. */
+function warm(front) {
+  if (!window.onvlc || !window.onvlc.warm || !LIB) return;
+  const list = [], seen = new Set();
+  const add = it => { if (it && !it.broken && !seen.has(it.id)) { seen.add(it.id); list.push(it); } };
+  add(front);
+  LIB.continue.forEach(id => add(byId[id]));
+  const firstEp = s => episodesOf(s).find(e => !e.broken);
+  [...LIB.movies, ...LIB.shows].sort((a, b) => b.added - a.added)
+    .forEach(it => add(it.kind === "show" ? (LIB.continue.map(id => byId[id]).find(e => e && e.show === it) || firstEp(it)) : it));
+  window.onvlc.warm(JSON.stringify(list.map(it => ({ id: it.id, size: it.size, file: it.file, bps: it.bps, pos: it.pos || 0 }))));
+}
+
 function play(it, fromStart) {
   if (it.broken) return toast("O PC não consegue abrir este arquivo.");
   if (OFFLINE) return toast("O PC está desligado. Abra o onVLC no PC e tente de novo.", 3500);
@@ -355,6 +377,7 @@ function back() {
   if (PL.open) return plBack();
   if (stack.length) {
     const prev = stack.pop();
+    if (screen.name === "movie" || screen.name === "show") plUnprepare();
     screen = prev.screen;
     render(prev.key);
     return true;
@@ -423,6 +446,7 @@ async function load() {
     RAW = text;
     LIB = JSON.parse(text);
     index();
+    if (!OFFLINE) warm();
     const key = current() && current().dataset.k;
     if (!PL.open) render(key);
   } else if (!LIB) {

@@ -31,8 +31,12 @@ import java.util.Map;
  *
  * O arquivo é dividido em blocos de 8 MB guardados no disco. Em volta do ponto que está tocando
  * baixa nesta ordem: o bloco pedido pelo VLC, os seguintes até 5 min à frente, depois 1 min atrás.
- * O que já baixou fica guardado até 2 GB; passando disso, sai o bloco usado há mais tempo
- * (nunca um da janela atual).
+ * O que já baixou fica guardado até 2 GB, de todos os filmes juntos; passando disso, sai o bloco usado
+ * há mais tempo (nunca um da janela atual).
+ *
+ * Kit de abertura (warm): para cada filme da biblioteca, em ordem de prioridade, guarda à parte (até 4 GB,
+ * sem contar nos 2 GB) os blocos que o player pede ao abrir (começo, fim com o índice e os que ele pediu
+ * na primeira vez), o primeiro minuto e 1 minuto a partir de onde parou. Assim o filme abre sem esperar a rede.
  *
  * Rotas: /stream/<nome> (o vídeo, com Range), /status (JSON da janela), /stop,
  * /ui/<arquivo> (a biblioteca da TV: repassa para o PC e guarda uma cópia para quando ele estiver desligado).
@@ -43,6 +47,8 @@ final class CacheServer {
     static final long LIMIT = 2L << 30;
     static final int AHEAD_S = 300, BEHIND_S = 60;
     static final int WORKERS = 2;
+    static final long KIT_LIMIT = 4L << 30;
+    static final int KIT_SECONDS = 60;
 
     private static CacheServer instance;
 
@@ -54,11 +60,16 @@ final class CacheServer {
     private final Context ctx;
     private final File dir;
     private final Object lock = new Object();
-    private final HashMap<Long, Long> blocks = new HashMap<>();  // bloco no disco → último uso
+    private final HashMap<Long, Long> blocks = new HashMap<>();  // bloco do filme aberto → último uso
+    private final HashMap<String, Long> store = new HashMap<>();  // todos os blocos no disco ("chave_n") → último uso
+    private final HashSet<String> pinned = new HashSet<>();  // blocos dos kits: a reprodução não apaga
+    private final HashSet<Long> asked = new HashSet<>();  // blocos que o player pediu logo ao abrir
+    private long openedAt;
+    private volatile int warmGen;
     private final HashSet<Long> loading = new HashSet<>();
     private ServerSocket server;
     private String upstream, key = "", contentType = "video/x-matroska";
-    private long size = -1, bps = 16_000_000L, playhead, urgent = -1, cachedBytes;
+    private long size = -1, bps = 16_000_000L, playhead, urgent = -1;
     private long downloaded, lastDownloaded, lastStatusAt;
     private boolean running;
     private int workersAlive;
@@ -67,14 +78,28 @@ final class CacheServer {
         this.ctx = ctx;
         dir = new File(ctx.getCacheDir(), "blocks");
         dir.mkdirs();
+        File[] files = dir.listFiles();
+        if (files != null) {
+            for (File f : files) {
+                String n = f.getName();
+                if (n.endsWith(".blk")) store.put(n.substring(0, n.length() - 4), f.lastModified());
+                else if (n.endsWith(".tmp")) f.delete();
+            }
+        }
+        pinned.addAll(ctx.getSharedPreferences("kit", Context.MODE_PRIVATE).getStringSet("pinned", new HashSet<String>()));
+    }
+
+    /** O PC manda .../v/<id>/<tamanho>/<nome>; tamanho + nome identificam o arquivo. */
+    static String keyFor(String url) {
+        String[] parts = url.split("/");
+        // "v2": blocos guardados pela versão anterior (que podia aceitar páginas de erro) são descartados
+        return Integer.toHexString(("v2:" + parts[parts.length - 2] + "/" + parts[parts.length - 1]).hashCode());
     }
 
     /** Prepara um vídeo. Se for o mesmo de antes (mesmo nome e tamanho), aproveita os blocos guardados. */
     void open(String url, long bitsPerSecond) throws IOException {
-        // o PC manda .../v/<token>/<tamanho>/<nome>; o token muda a cada vez, tamanho + nome não
         String[] parts = url.split("/");
-        // "v2": blocos guardados pela versão anterior (que podia aceitar páginas de erro) são descartados
-        String newKey = Integer.toHexString(("v2:" + parts[parts.length - 2] + "/" + parts[parts.length - 1]).hashCode());
+        String newKey = keyFor(url);
         synchronized (lock) {
             upstream = url;
             if (bitsPerSecond > 0) bps = bitsPerSecond;
@@ -90,20 +115,13 @@ final class CacheServer {
                 key = newKey;
                 playhead = 0;
                 blocks.clear();
-                cachedBytes = 0;
-                File[] files = dir.listFiles();
-                if (files != null) {
-                    for (File f : files) {
-                        String n = f.getName();
-                        if (n.startsWith(key + "_") && n.endsWith(".blk")) {
-                            blocks.put(Long.parseLong(n.substring(key.length() + 1, n.length() - 4)), f.lastModified());
-                            cachedBytes += f.length();
-                        } else {
-                            f.delete();  // outro filme: libera o espaço
-                        }
-                    }
+                String prefix = key + "_";
+                for (Map.Entry<String, Long> e : store.entrySet()) {
+                    if (e.getKey().startsWith(prefix)) blocks.put(Long.parseLong(e.getKey().substring(prefix.length())), e.getValue());
                 }
             }
+            openedAt = System.currentTimeMillis();
+            asked.clear();
             running = true;
             lock.notifyAll();
         }
@@ -349,7 +367,11 @@ final class CacheServer {
                 if (System.currentTimeMillis() - t0 > 60000) throw new IOException("tempo esgotado");
             }
             if (urgent == idx) urgent = -1;
-            blocks.put(idx, System.currentTimeMillis());
+            long now = System.currentTimeMillis();
+            blocks.put(idx, now);
+            store.put(key + "_" + idx, now);
+            // o que o player pede nos primeiros segundos entra no kit deste arquivo (índice, legendas, etc.)
+            if (now - openedAt < 15000 && asked.add(idx)) learn(key, idx);
             return new File(dir, key + "_" + idx + ".blk");
         }
     }
@@ -410,7 +432,7 @@ final class CacheServer {
                     continue;
                 }
                 try {
-                    download(url, k, idx, from, to);
+                    download(url, k, idx, from, to, size);
                 } catch (IOException e) {
                     Thread.sleep(1000);  // PC ocupado ou Wi-Fi oscilou: tenta de novo
                 } finally {
@@ -450,25 +472,49 @@ final class CacheServer {
         return i >= 0 && i < total && !blocks.containsKey(i) && !loading.contains(i);
     }
 
-    /** Abre espaço para mais um bloco apagando o usado há mais tempo fora da janela atual. */
+    /** Blocos dos kits já baixados (chamado com o lock). */
+    private long kitHave() {
+        long n = 0;
+        for (String k : pinned) if (store.containsKey(k)) n++;
+        return n;
+    }
+
+    /** Bytes guardados fora dos kits (chamado com o lock). */
+    private long cachedBytes() {
+        long n = 0;
+        for (String k : store.keySet()) if (!pinned.contains(k)) n++;
+        return n * BLOCK;
+    }
+
+    /** Abre espaço para mais um bloco apagando o usado há mais tempo (de qualquer filme), fora da janela atual e dos kits. */
     private boolean makeRoom(long p, long ahead, long behind) {
-        while (cachedBytes + BLOCK > LIMIT) {
-            long victim = -1, oldest = Long.MAX_VALUE;
-            for (Map.Entry<Long, Long> e : blocks.entrySet()) {
-                long i = e.getKey();
-                if (i >= p - behind && i <= p + ahead) continue;
+        String prefix = key + "_";
+        while (cachedBytes() + BLOCK > LIMIT) {
+            String victim = null;
+            long oldest = Long.MAX_VALUE;
+            for (Map.Entry<String, Long> e : store.entrySet()) {
+                String n = e.getKey();
+                if (pinned.contains(n)) continue;
+                if (n.startsWith(prefix)) {
+                    long i = Long.parseLong(n.substring(prefix.length()));
+                    if (i >= p - behind && i <= p + ahead) continue;
+                }
                 if (e.getValue() < oldest) {
                     oldest = e.getValue();
-                    victim = i;
+                    victim = n;
                 }
             }
-            if (victim < 0) return false;
-            File f = new File(dir, key + "_" + victim + ".blk");
-            cachedBytes -= f.length();
-            f.delete();
-            blocks.remove(victim);
+            if (victim == null) return false;
+            drop(victim);
         }
         return true;
+    }
+
+    private void drop(String name) {
+        new File(dir, name + ".blk").delete();
+        store.remove(name);
+        String prefix = key + "_";
+        if (name.startsWith(prefix)) blocks.remove(Long.parseLong(name.substring(prefix.length())));
     }
 
     private HttpURLConnection connect(String url) throws IOException {
@@ -493,7 +539,7 @@ final class CacheServer {
         }
     }
 
-    private void download(String url, String k, long idx, long from, long to) throws IOException {
+    private void download(String url, String k, long idx, long from, long to, long total) throws IOException {
         HttpURLConnection c = connect(url);
         c.setRequestProperty("Range", "bytes=" + from + "-" + to);
         File tmp = new File(dir, k + "_" + idx + ".tmp");
@@ -504,7 +550,7 @@ final class CacheServer {
             throw new IOException("o PC respondeu " + c.getResponseCode());
         }
         String cr = c.getHeaderField("Content-Range");
-        if (cr == null || !cr.endsWith("/" + size)) {
+        if (cr == null || !cr.endsWith("/" + total)) {
             c.disconnect();
             throw new IOException("pedaço de outro arquivo: " + cr);
         }
@@ -518,6 +564,7 @@ final class CacheServer {
                 synchronized (lock) {
                     downloaded += r;
                 }
+                if (Thread.currentThread().isInterrupted()) throw new IOException("cancelado");
             }
             if (got != to - from + 1) throw new IOException("bloco incompleto");
         } catch (IOException e) {
@@ -527,14 +574,125 @@ final class CacheServer {
             c.disconnect();
         }
         synchronized (lock) {
-            if (!k.equals(key) || !tmp.renameTo(dst)) {  // trocou de filme no meio do download
+            if (!tmp.renameTo(dst)) {
                 tmp.delete();
                 return;
             }
-            blocks.put(idx, System.currentTimeMillis());
-            cachedBytes += dst.length();
+            long now = System.currentTimeMillis();
+            store.put(k + "_" + idx, now);
+            if (k.equals(key)) blocks.put(idx, now);  // de outro filme (kit ou troca no meio): fica guardado para ele
             lock.notifyAll();
         }
+    }
+
+    // ---------- kit de abertura ----------
+    static final class KitItem {
+        String url;
+        long size, bps;
+        double pos;  // onde parou (0: do começo)
+    }
+
+    private void learn(String k, long idx) {
+        android.content.SharedPreferences p = ctx.getSharedPreferences("learn", Context.MODE_PRIVATE);
+        String cur = p.getString(k, "");
+        if (("," + cur + ",").contains("," + idx + ",")) return;
+        String[] list = cur.isEmpty() ? new String[0] : cur.split(",");
+        if (list.length >= 16) return;
+        p.edit().putString(k, cur.isEmpty() ? String.valueOf(idx) : cur + "," + idx).apply();
+    }
+
+    private ArrayList<Long> learned(String k) {
+        ArrayList<Long> out = new ArrayList<>();
+        String cur = ctx.getSharedPreferences("learn", Context.MODE_PRIVATE).getString(k, "");
+        for (String x : cur.split(",")) {
+            if (!x.isEmpty()) out.add(Long.parseLong(x));
+        }
+        return out;
+    }
+
+    /** Blocos do kit de um filme, do mais importante para o menos: o que abre, o ponto de retomada, o começo. */
+    private ArrayList<Long> kitBlocks(KitItem it, String k) {
+        java.util.LinkedHashSet<Long> want = new java.util.LinkedHashSet<>();
+        long total = (it.size + BLOCK - 1) / BLOCK;
+        double perSecond = Math.max(1_000_000, it.bps) / 8.0 / BLOCK;
+        long minute = (long) Math.ceil(KIT_SECONDS * perSecond) + 1;
+        for (long i : learned(k)) if (i < total) want.add(i);
+        want.add(0L);
+        if (total > 1) want.add(total - 1);  // índice do MKV / MP4 no fim
+        if (total > 2) want.add(total - 2);
+        if (it.pos > 0) {
+            long r = (long) (it.pos * perSecond);
+            for (long i = Math.max(0, r - 1); i <= r + minute && i < total; i++) want.add(i);
+        }
+        for (long i = 0; i <= minute && i < total; i++) want.add(i);
+        return new ArrayList<>(want);
+    }
+
+    /**
+     * Monta os kits na ordem recebida (prioridade), até KIT_LIMIT. Chamar de novo troca a fila: a página manda a
+     * lista ao abrir e de novo, com o filme da frente, quando a pessoa entra na página de um filme.
+     * Não baixa nada enquanto um filme toca.
+     */
+    void warm(final java.util.List<KitItem> items) {
+        final int gen = ++warmGen;
+        Thread t = new Thread(() -> {
+            java.util.LinkedHashMap<String, KitItem> want = new java.util.LinkedHashMap<>();
+            long budget = 0;
+            outer:
+            for (KitItem it : items) {
+                String k = keyFor(it.url);
+                for (long i : kitBlocks(it, k)) {
+                    String n = k + "_" + i;
+                    if (want.containsKey(n)) continue;
+                    if (budget + BLOCK > KIT_LIMIT) break outer;
+                    want.put(n, it);
+                    budget += BLOCK;
+                }
+            }
+            synchronized (lock) {
+                pinned.clear();
+                pinned.addAll(want.keySet());  // o que saiu do kit volta a ser bloco comum (pode ser apagado)
+                ctx.getSharedPreferences("kit", Context.MODE_PRIVATE).edit().putStringSet("pinned", new HashSet<>(pinned)).apply();
+            }
+            for (Map.Entry<String, KitItem> e : want.entrySet()) {
+                if (gen != warmGen) return;
+                String n = e.getKey();
+                synchronized (lock) {
+                    if (store.containsKey(n)) continue;
+                }
+                try {
+                    while (true) {  // espera o filme que está tocando parar
+                        synchronized (lock) {
+                            if (!running || upstream == null) break;
+                        }
+                        if (gen != warmGen) return;
+                        Thread.sleep(3000);
+                    }
+                    KitItem it = e.getValue();
+                    long idx = Long.parseLong(n.substring(n.indexOf('_') + 1));
+                    long from = idx * BLOCK, to = Math.min(it.size, from + BLOCK) - 1;
+                    download(it.url, n.substring(0, n.indexOf('_')), idx, from, to, it.size);
+                } catch (InterruptedException ie) {
+                    return;
+                } catch (IOException io) {
+                    // PC fora do ar ou ocupado: a próxima lista tenta de novo
+                }
+            }
+        }, "kit");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        t.start();
+    }
+
+    /** Quanto do kit de um filme já está na Mi Box (0 a 1), para a página mostrar "pronto para abrir". */
+    double kitReady(KitItem it) {
+        String k = keyFor(it.url);
+        ArrayList<Long> list = kitBlocks(it, k);
+        int have = 0;
+        synchronized (lock) {
+            for (long i : list) if (store.containsKey(k + "_" + i)) have++;
+        }
+        return list.isEmpty() ? 1 : (double) have / list.size();
     }
 
     // ---------- status ----------
@@ -578,9 +736,10 @@ final class CacheServer {
             String src = upstream == null ? "" : upstream.replace("\\", "\\\\").replace("\"", "\\\"");
             return String.format(Locale.US,
                     "{\"state\":\"%s\",\"src\":\"%s\",\"pos\":%.1f,\"dur\":%.1f,\"ahead\":%.1f,\"behind\":%.1f,"
-                            + "\"cachedMb\":%d,\"limitMb\":%d,\"mbps\":%.1f,\"loading\":%d,\"ranges\":%s}",
+                            + "\"cachedMb\":%d,\"limitMb\":%d,\"kitMb\":%d,\"kitWantMb\":%d,\"mbps\":%.1f,\"loading\":%d,\"ranges\":%s}",
                     upstream == null ? "idle" : (running ? "ok" : "paused"), src, playhead * spb, size > 0 ? size * spb : 0,
-                    ahead, behind, cachedBytes >> 20, LIMIT >> 20, mbps, loading.size(), ranges);
+                    ahead, behind, cachedBytes() >> 20, LIMIT >> 20, kitHave() * (BLOCK >> 20), pinned.size() * (BLOCK >> 20),
+                    mbps, loading.size(), ranges);
         }
     }
 }

@@ -59,17 +59,43 @@ function openPlayer(it, posMs) {
     scrub: null, panel: null, pausedSince: 0, next: null, nextOff: false, thumbs: { n: 0, have: [] }, subPicked: false });
   document.documentElement.classList.add("playing");
   plBuild();
-  const title = it.kind === "episode" ? `${it.show.title} · ${epLabel(it)} · ${it.title}` : it.title;
-  window.onvlc.play(JSON.stringify({ id: it.id, size: it.size, file: it.file, title, pos: posMs, bps: it.bps,
-    subs: (it.extSubs || []).length }));
+  PL.req = plRequest(it, posMs);
+  window.onvlc.play(PL.req);
   plPoke();
   plLoadThumbs();
+  // abertura travada (aconteceu uma vez com o PC ocupado): tenta de novo uma vez
+  clearTimeout(PL.watchdog);
+  PL.retried = false;
+  PL.watchdog = setTimeout(function retry() {
+    if (!PL.open || PL.it !== it || PL.st.state !== "opening") return;
+    if (PL.retried) { toast("O filme não abriu. O PC está ligado?"); return closePlayer(true); }
+    PL.retried = true;
+    toast("Demorou para abrir, tentando de novo…");
+    window.onvlc.stop();
+    window.onvlc.play(PL.req);
+    PL.watchdog = setTimeout(retry, 15000);
+  }, 15000);
 }
+
+/** O pedido de abrir um vídeo (o mesmo para preparar e para tocar: o app compara id e posição). */
+function plRequest(it, posMs) {
+  const title = it.kind === "episode" ? `${it.show.title} · ${epLabel(it)} · ${it.title}` : it.title;
+  return JSON.stringify({ id: it.id, size: it.size, file: it.file, title, pos: posMs, bps: it.bps,
+    subs: (it.extSubs || []).length });
+}
+
+/** Na página de um filme: o app já abre ele pausado, escondido, e o "Assistir" fica imediato. */
+function plPrepare(it) {
+  if (!window.onvlc || !window.onvlc.prepare || !it || it.broken || OFFLINE || PL.open) return;
+  window.onvlc.prepare(plRequest(it, Math.round((it.pos || 0) * 1000)));
+}
+function plUnprepare() { if (window.onvlc && window.onvlc.unprepare && !PL.open) window.onvlc.unprepare(); }
 function closePlayer(stopEngine) {
   if (!PL.open) return;
   PL.open = false;
   clearTimeout(PL.thumbTimer);
   clearTimeout(PL.hideTimer);
+  clearTimeout(PL.watchdog);
   if (stopEngine && window.onvlc) window.onvlc.stop();
   const el = $("player");
   if (el) el.remove();
@@ -193,7 +219,7 @@ function plUpdate() {
     $("pl-prev-t").textContent = clock(PL.scrub);
   }
   // linha de cima: ano · qualidade · áudio
-  const audio = (st.audio || []).find(a => a.id === st.audioId);
+  const audio = plAudioList().find(a => a.id === st.audioId);
   const it = PL.it;
   $("pl-t2").textContent = (it.kind === "episode" ? [epLabel(it) + " · " + it.title] : [it.year, it.quality])
     .concat(audio ? [audio.name] : []).filter(Boolean).join(" · ");
@@ -223,12 +249,40 @@ function plUpdate() {
 }
 
 // ---------- painéis ----------
-function plAudioList() { return (PL.st.audio || []).filter(a => a.id >= 0); }
-// os nomes que a biblioteca deu ("Português", "Inglês (SDH)") no lugar dos do motor ("Track 3 - [English]"):
-// o motor lista as do vídeo na ordem do arquivo e depois as de arquivo .srt, na ordem em que foram passadas
+function plAudioList() {
+  const list = (PL.st.audio || []).filter(a => a.id >= 0), lib = PL.it.audio || [];
+  // a biblioteca sabe os canais ("Inglês 7.1"); quando as contas batem, usa os nomes dela
+  return list.map((a, k) => ({ id: a.id, name: list.length === lib.length ? lib[k] : plTrackName(a.name) }));
+}
+// nomes do motor em português: "Track 7 - [Chinese]" → "Chinês", "American English SDH - [English]" → "Inglês americano (SDH)"
+const LANGS = { english: "Inglês", portuguese: "Português", spanish: "Espanhol", french: "Francês", german: "Alemão", italian: "Italiano",
+  japanese: "Japonês", korean: "Coreano", chinese: "Chinês", arabic: "Árabe", dutch: "Holandês", russian: "Russo", thai: "Tailandês",
+  indonesian: "Indonésio", malay: "Malaio", polish: "Polonês", turkish: "Turco", hindi: "Hindi", swedish: "Sueco", danish: "Dinamarquês",
+  norwegian: "Norueguês", finnish: "Finlandês", greek: "Grego", hebrew: "Hebraico", czech: "Tcheco", hungarian: "Húngaro", romanian: "Romeno",
+  vietnamese: "Vietnamita", ukrainian: "Ucraniano" };
+function plTrackName(raw) {
+  const m = /^(.*?)\s*-\s*\[([^\]]+)\]$/.exec(raw || "");
+  if (!m) return raw || "Faixa";
+  const lang = LANGS[m[2].toLowerCase()] || m[2];
+  const d = m[1].toLowerCase();
+  if (/^track \d+$/.test(d) || !d) return lang;
+  const bits = [lang];
+  if (/american/.test(d)) bits.push("americano");
+  if (/british/.test(d)) bits.push("britânico");
+  if (/brazil/.test(d)) bits.push("do Brasil");
+  if (/europe|portugal/.test(d)) bits.push("de Portugal");
+  if (/latin/.test(d)) bits.push("latino");
+  let name = bits.join(" ");
+  if (/sdh|cc/.test(d)) name += " (SDH)";
+  if (/forced/.test(d)) name += " (só falas estrangeiras)";
+  if (bits.length === 1 && !/sdh|cc|forced/.test(d)) name += ` · ${m[1]}`;
+  return name;
+}
 function plSpuList() {
-  const list = (PL.st.spu || []).filter(s => s.id >= 0), names = PL.it.subs || [];
-  const named = list.length === names.length ? list.map((s, k) => ({ id: s.id, name: names[k] })) : list;
+  const list = (PL.st.spu || []).filter(s => s.id >= 0), ext = PL.it.extSubs || [];
+  // as de arquivo .srt entram depois das do próprio vídeo, na ordem em que foram passadas
+  const first = list.length - ext.length;
+  const named = list.map((s, k) => ({ id: s.id, name: k >= first && ext[k - first] ? ext[k - first].name : plTrackName(s.name) }));
   return [{ id: -1, name: "Desligadas" }, ...named];
 }
 // filme em outra língua com legenda em português: já começa com ela

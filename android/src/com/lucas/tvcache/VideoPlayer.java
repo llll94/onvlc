@@ -43,7 +43,8 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
     private String state = "idle";
     private float buffering = 100;
     private int videoW, videoH, sarNum = 1, sarDen = 1;
-    private boolean ended;
+    private boolean ended, prepared;
+    private long preparedAt;
 
     VideoPlayer(Activity act, FrameLayout root, Listener listener) {
         this.act = act;
@@ -61,14 +62,40 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
     }
 
     boolean active() {
-        return mp != null && id != null;
+        return mp != null && id != null && !prepared;
+    }
+
+    /** Aberto pausado, atrás da página, à espera do "Assistir" (ver prepare). */
+    boolean preparedFor(String fileId, long posMs) {
+        return prepared && fileId.equals(id) && Math.abs(preparedAt - posMs) < 3000;
     }
 
     String currentId() {
         return id;
     }
 
+    /**
+     * Abre o filme pausado no ponto de início, atrás da página da biblioteca: o motor já lê o índice do MKV
+     * e liga o decodificador (uns 4 s num 4K da Mi Box) enquanto a pessoa lê a sinopse. O "Assistir" só solta o pause.
+     */
+    void prepare(String fileId, String url, long posMs, String[] subtitles) {
+        if (preparedFor(fileId, posMs)) return;
+        open(fileId, url, posMs, subtitles, true);
+    }
+
+    /** Solta o filme preparado. */
+    void start() {
+        prepared = false;
+        if (mp != null) mp.play();
+        ui.removeCallbacks(tick);
+        ui.post(tick);
+    }
+
     void open(String fileId, String url, long posMs, String[] subtitles) {
+        open(fileId, url, posMs, subtitles, false);
+    }
+
+    private void open(String fileId, String url, long posMs, String[] subtitles, boolean paused) {
         if (lib == null) {
             ArrayList<String> opts = new ArrayList<>();
             opts.add("--audio-time-stretch");
@@ -79,6 +106,8 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
         }
         if (id != null) stop(false);
         id = fileId;
+        prepared = paused;
+        preparedAt = posMs;
         ended = false;
         state = "opening";
         buffering = 0;
@@ -92,15 +121,20 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
         m.setHWDecoderEnabled(true, false);
         // o vídeo já vem do cache local (127.0.0.1): uma reserva curta basta e o filme começa antes
         m.addOption(":network-caching=400");
+        // o VLC enche 16 MB a cada pedido antes de seguir (pensado para internet); abrir um MKV faz vários
+        // pedidos (começo, índice no fim, ponto de retomada) e cada um esperava os 16 MB do disco da Mi Box
+        m.addOption(":prefetch-read-size=262144");
+        m.addOption(":prefetch-buffer-size=4096");
         for (String sub : subtitles) {  // legendas em arquivo, servidas pelo PC (entram depois das do próprio vídeo)
             m.addSlave(new IMedia.Slave(IMedia.Slave.Type.Subtitle, 0, sub));
         }
         if (posMs > 0) m.addOption(":start-time=" + (posMs / 1000.0));
+        if (paused) m.addOption(":start-paused");
         mp.setMedia(m);
         m.release();
         mp.play();
         ui.removeCallbacks(tick);
-        ui.post(tick);
+        if (!paused) ui.post(tick);
     }
 
     void toggle() {
@@ -126,13 +160,15 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
         if (mp == null || id == null) return;
         double pos = Math.max(0, mp.getTime()) / 1000.0, dur = Math.max(0, mp.getLength()) / 1000.0;
         String was = id;
+        boolean wasPrepared = prepared;
         id = null;
+        prepared = false;
         ui.removeCallbacks(tick);
         mp.stop();
         mp.getVLCVout().detachViews();
         box.setVisibility(View.GONE);
         state = "idle";
-        if (report) listener.onStopped(was, ended ? dur : pos, dur, ended);
+        if (report && !wasPrepared) listener.onStopped(was, ended ? dur : pos, dur, ended);
     }
 
     void release() {

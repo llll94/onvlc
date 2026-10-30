@@ -94,6 +94,7 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
             player.stop(true);
             web.evaluateJavascript("window.onPlayerClosed && onPlayerClosed()", null);
         }
+        player.stop(false);  // filme preparado (pausado atrás da página) sem ter começado
         super.onPause();
     }
 
@@ -106,7 +107,7 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
     private final class Bridge {
         @JavascriptInterface
         public void play(final String json) {
-            runOnUiThread(() -> startPlay(json));
+            runOnUiThread(() -> startPlay(json, false));
         }
 
         @JavascriptInterface
@@ -133,11 +134,60 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
         public void stop() {
             runOnUiThread(() -> player.stop(true));
         }
+
+        /** A pessoa entrou na página do filme: abre pausado, escondido, para o "Assistir" ser imediato. */
+        @JavascriptInterface
+        public void prepare(final String json) {
+            runOnUiThread(() -> startPlay(json, true));
+        }
+
+        /** Saiu da página sem assistir. */
+        @JavascriptInterface
+        public void unprepare() {
+            runOnUiThread(() -> {
+                if (!player.active()) {
+                    player.stop(false);
+                    CacheServer.get(LibraryActivity.this).pause();
+                }
+            });
+        }
+
+        /** Kits de abertura: lista de filmes em ordem de prioridade ([{id,size,file,bps,pos}]). */
+        @JavascriptInterface
+        public void warm(final String json) {
+            String b = PcFinder.base();
+            if (b == null) return;
+            try {
+                org.json.JSONArray a = new org.json.JSONArray(json);
+                java.util.ArrayList<CacheServer.KitItem> items = new java.util.ArrayList<>();
+                for (int i = 0; i < a.length(); i++) {
+                    JSONObject o = a.getJSONObject(i);
+                    CacheServer.KitItem it = new CacheServer.KitItem();
+                    it.url = b + "/v/" + o.getString("id") + "/" + o.getLong("size") + "/" + Uri.encode(o.getString("file"));
+                    it.size = o.getLong("size");
+                    it.bps = o.optLong("bps", 0);
+                    it.pos = o.optDouble("pos", 0);
+                    items.add(it);
+                }
+                CacheServer.get(LibraryActivity.this).warm(items);
+            } catch (Exception e) {
+                // lista inválida: ignora
+            }
+        }
     }
 
-    private void startPlay(String json) {
+    private void startPlay(String json, boolean prepareOnly) {
         try {
             JSONObject o = new JSONObject(json);
+            if (!prepareOnly && player.preparedFor(o.getString("id"), o.optLong("pos", 0))) {
+                // já está aberto e pausado no ponto certo: só soltar
+                startForegroundService(new Intent(this, CacheService.class));
+                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                lastSent = -1;
+                player.start();
+                return;
+            }
+            if (prepareOnly && player.active()) return;  // um filme tocando: não mexe
             base = PcFinder.base();
             if (base == null) {
                 web.evaluateJavascript("toast('Não achei o PC na rede. Ele está ligado com o onVLC aberto?')", null);
@@ -146,14 +196,17 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
             }
             String upstream = base + "/v/" + o.getString("id") + "/" + o.getLong("size") + "/" + Uri.encode(o.getString("file"));
             CacheServer.get(this).open(upstream, o.optLong("bps", 0));
-            startForegroundService(new Intent(this, CacheService.class));
             String session = Long.toHexString(System.nanoTime());
             String local = "http://127.0.0.1:" + CacheServer.PORT + "/stream/" + session + "/" + Uri.encode(o.getString("file"));
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            if (!prepareOnly) {
+                startForegroundService(new Intent(this, CacheService.class));
+                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            }
             lastSent = -1;
             String[] subs = new String[o.optInt("subs", 0)];
             for (int i = 0; i < subs.length; i++) subs[i] = base + "/sub/" + o.getString("id") + "/" + i;
-            player.open(o.getString("id"), local, o.optLong("pos", 0), subs);
+            if (prepareOnly) player.prepare(o.getString("id"), local, o.optLong("pos", 0), subs);
+            else player.open(o.getString("id"), local, o.optLong("pos", 0), subs);
         } catch (Exception e) {
             web.evaluateJavascript("toast('Não consegui abrir o filme')", null);
         }

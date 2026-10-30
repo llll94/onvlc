@@ -57,7 +57,7 @@ TMDB = "https://api.themoviedb.org/3"
 TMDB_IMG = "https://image.tmdb.org/t/p/"
 log = logging.getLogger("onvlc.lib")
 
-PROBE_VERSION = 3  # sobe quando o probe passa a ler algo novo: os vídeos já guardados são lidos de novo
+PROBE_VERSION = 4  # sobe quando o probe passa a ler algo novo: os vídeos já guardados são lidos de novo
 # capítulo sem nome de verdade: "00:12:30.000", "Chapter 05", "Capítulo 5" (mesma regra do main.py)
 GENERIC_CHAPTER = re.compile(r"^\s*((chapter|chap|cap[ií]tulo|cap)\.?\s*\d+|\d{1,2}(:\d{2}){1,2}([.,]\d+)?)\s*$", re.I)
 
@@ -138,7 +138,7 @@ def probe(path):
         title = ((c.get("tags") or {}).get("title") or "").strip()
         chapters.append({"start": round(float(c.get("start_time") or 0), 2),
                          "title": "" if GENERIC_CHAPTER.match(title) else title})
-    return {"dur": dur, "quality": q, "audio": list(dict.fromkeys(audio)), "subs": list(dict.fromkeys(subs)),
+    return {"dur": dur, "quality": q, "audio": audio, "subs": list(dict.fromkeys(subs)),
             "chapters": chapters, "extSubs": ext_subs, "v": PROBE_VERSION}
 
 
