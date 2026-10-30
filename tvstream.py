@@ -32,6 +32,49 @@ log = logging.getLogger("onvlc.tv")
 
 
 # ---------- servidor de vídeo ----------
+def send_file(h, path, body=True):
+    """Responde um pedido HTTP com o arquivo, aceitando Range (o VLC e o TV Cache pedem pedaços)."""
+    if not path or not os.path.isfile(path):
+        h.send_error(404)
+        return
+    size = os.path.getsize(path)
+    start, end = 0, size - 1
+    m = re.match(r"bytes=(\d*)-(\d*)", h.headers.get("Range", ""))
+    if m and (m.group(1) or m.group(2)):
+        if m.group(1):
+            start = int(m.group(1))
+            end = min(size - 1, int(m.group(2))) if m.group(2) else size - 1
+        else:  # bytes=-N: os últimos N bytes
+            start = max(0, size - int(m.group(2)))
+        if start >= size:
+            h.send_response(416)
+            h.send_header("Content-Range", f"bytes */{size}")
+            h.end_headers()
+            return
+        h.send_response(206)
+        h.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+    else:
+        h.send_response(200)
+    h.send_header("Content-Type", "video/x-matroska" if path.lower().endswith(".mkv") else "video/mp4")
+    h.send_header("Accept-Ranges", "bytes")
+    h.send_header("Content-Length", str(end - start + 1))
+    h.end_headers()
+    if not body:
+        return
+    with open(path, "rb") as f:
+        f.seek(start)
+        left = end - start + 1
+        try:
+            while left > 0:
+                data = f.read(min(CHUNK, left))
+                if not data:
+                    break
+                h.wfile.write(data)
+                left -= len(data)
+        except (ConnectionError, OSError):
+            pass  # o VLC fechou a conexão para pular para outro ponto: normal
+
+
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -57,46 +100,7 @@ class _Handler(BaseHTTPRequestHandler):
             if body:
                 self.wfile.write(data)
             return
-        path = self._file()
-        if not path or not os.path.isfile(path):
-            self.send_error(404)
-            return
-        size = os.path.getsize(path)
-        start, end = 0, size - 1
-        m = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
-        if m and (m.group(1) or m.group(2)):
-            if m.group(1):
-                start = int(m.group(1))
-                end = min(size - 1, int(m.group(2))) if m.group(2) else size - 1
-            else:  # bytes=-N: os últimos N bytes
-                start = max(0, size - int(m.group(2)))
-            if start >= size:
-                self.send_response(416)
-                self.send_header("Content-Range", f"bytes */{size}")
-                self.end_headers()
-                return
-            self.send_response(206)
-            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-        else:
-            self.send_response(200)
-        self.send_header("Content-Type", "video/x-matroska" if path.lower().endswith(".mkv") else "video/mp4")
-        self.send_header("Accept-Ranges", "bytes")
-        self.send_header("Content-Length", str(end - start + 1))
-        self.end_headers()
-        if not body:
-            return
-        with open(path, "rb") as f:
-            f.seek(start)
-            left = end - start + 1
-            try:
-                while left > 0:
-                    data = f.read(min(CHUNK, left))
-                    if not data:
-                        break
-                    self.wfile.write(data)
-                    left -= len(data)
-            except (ConnectionError, OSError):
-                pass  # o VLC fechou a conexão para pular para outro ponto: normal
+        send_file(self, self._file(), body)
 
 
 class _Server(ThreadingHTTPServer):

@@ -81,6 +81,8 @@ def main():
         "--name", NAME, "--noconfirm", "--windowed", "--onedir",
         "--icon", str(ROOT / "ui" / "icon.ico"),
         "--add-data", f"{ROOT / 'ui'}{os.pathsep}ui",
+        "--add-data", f"{ROOT / 'tvui'}{os.pathsep}tvui",
+        "--hidden-import", "library",
         "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build"), "--specpath", str(ROOT / "build"),
     ], check=True)
 

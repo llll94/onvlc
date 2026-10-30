@@ -325,6 +325,7 @@ class Player(QObject):
     def _save_position(self):
         if self.path and self.st.get("dur", 0) > 0:
             self.settings.setValue("pos/" + self._key(self.path), self.st["pos"])
+            self.settings.setValue("posAt/" + self._key(self.path), time.time())  # ordem do "Continuar assistindo" da TV
 
     def _recent_list(self):
         rec = self.settings.value("recent", []) or []
@@ -903,6 +904,10 @@ def setup_log():
 
 
 def main():
+    if "--biblioteca" in sys.argv:  # processo separado, sem janela: a biblioteca da TV
+        import library
+        library.main()
+        return
     setup_log()
     QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGL)
     app = QApplication(sys.argv)
@@ -912,6 +917,11 @@ def main():
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("PlayerLucas.Player")
     player = Player(app)
     player.show()
+    try:
+        import library
+        library.start_detached()  # continua rodando depois que a janela fecha
+    except Exception:
+        log.exception("não consegui abrir a biblioteca da TV")
     if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
         player.open_path(sys.argv[1])
     sys.exit(app.exec())

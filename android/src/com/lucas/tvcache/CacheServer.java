@@ -2,10 +2,13 @@ package com.lucas.tvcache;
 
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -31,7 +34,8 @@ import java.util.Map;
  * O que já baixou fica guardado até 2 GB; passando disso, sai o bloco usado há mais tempo
  * (nunca um da janela atual).
  *
- * Rotas: /stream/<nome> (o vídeo, com Range), /status (JSON da janela), /stop.
+ * Rotas: /stream/<nome> (o vídeo, com Range), /status (JSON da janela), /stop,
+ * /ui/<arquivo> (a biblioteca da TV: repassa para o PC e guarda uma cópia para quando ele estiver desligado).
  */
 final class CacheServer {
     static final int PORT = 8090;
@@ -107,6 +111,11 @@ final class CacheServer {
         startWorkers();
     }
 
+    /** Liga só o servidor (a biblioteca usa antes de existir um filme aberto). */
+    void startUi() throws IOException {
+        startServer();
+    }
+
     void pause() {
         synchronized (lock) {
             running = false;
@@ -162,6 +171,8 @@ final class CacheServer {
                 ctx.stopService(new Intent(ctx, CacheService.class));
             } else if (path.startsWith("/stream/")) {
                 stream(method, range, out);
+            } else if (path.startsWith("/ui/")) {
+                ui(path, out);
             } else {
                 send(out, "404 Not Found", "text/plain", "não encontrado".getBytes("UTF-8"));
             }
@@ -172,10 +183,95 @@ final class CacheServer {
     }
 
     private static void send(OutputStream out, String status, String type, byte[] body) throws IOException {
+        send(out, status, type, body, "");
+    }
+
+    private static void send(OutputStream out, String status, String type, byte[] body, String extra) throws IOException {
         String h = "HTTP/1.1 " + status + "\r\nContent-Type: " + type + "\r\nContent-Length: " + body.length
-                + "\r\nConnection: close\r\n\r\n";
+                + "\r\nCache-Control: no-cache\r\n" + extra + "Connection: close\r\n\r\n";
         out.write(h.getBytes("ISO-8859-1"));
         out.write(body);
+    }
+
+    // ---------- biblioteca ----------
+    private void ui(String path, OutputStream out) throws IOException {
+        String rel = path.substring(4);
+        int q = rel.indexOf('?');
+        if (q >= 0) rel = rel.substring(0, q);
+        rel = Uri.decode(rel);
+        if (rel.isEmpty()) rel = "index.html";
+        if (rel.contains("..")) {
+            send(out, "404 Not Found", "text/plain", new byte[0]);
+            return;
+        }
+        boolean image = rel.startsWith("img/");
+        String remote = rel.startsWith("api/") || image ? "/" + rel : "/tv/" + rel;
+        File cached = new File(new File(ctx.getFilesDir(), "ui"), rel.replace('/', '_'));
+        String type = typeOf(rel);
+        // imagens não mudam (um arquivo novo ganha outro nome): a cópia guardada vale sempre
+        if (image && cached.exists()) {
+            send(out, "200 OK", type, readAll(new FileInputStream(cached)));
+            return;
+        }
+        String base = PcFinder.base();
+        if (base != null) {
+            HttpURLConnection c = null;
+            try {
+                c = connect(base + remote.replace(" ", "%20"));
+                c.setConnectTimeout(2000);
+                c.setReadTimeout(8000);
+                int code = c.getResponseCode();
+                if (code == 200) {
+                    byte[] body = readAll(c.getInputStream());
+                    cached.getParentFile().mkdirs();
+                    File tmp = new File(cached.getPath() + ".tmp");
+                    try (OutputStream f = new FileOutputStream(tmp)) {
+                        f.write(body);
+                    }
+                    tmp.renameTo(cached);
+                    send(out, "200 OK", type, body, "X-onVLC-Offline: 0\r\n");
+                    return;
+                }
+                if (code == 404 && image) {
+                    send(out, "404 Not Found", "text/plain", new byte[0]);
+                    return;
+                }
+            } catch (IOException e) {
+                PcFinder.lost(ctx);
+            } finally {
+                if (c != null) c.disconnect();
+            }
+        } else {
+            PcFinder.search(ctx);
+        }
+        if (cached.exists()) {  // PC desligado: a última cópia
+            send(out, "200 OK", type, readAll(new FileInputStream(cached)), "X-onVLC-Offline: 1\r\n");
+            return;
+        }
+        try {  // nunca falou com o PC: a cópia da tela que veio dentro do app
+            send(out, "200 OK", type, readAll(ctx.getAssets().open("tvui/" + rel)), "X-onVLC-Offline: 1\r\n");
+        } catch (IOException e) {
+            send(out, "503 Service Unavailable", "text/plain", new byte[0]);
+        }
+    }
+
+    private static String typeOf(String rel) {
+        if (rel.startsWith("api/")) return "application/json; charset=utf-8";
+        if (rel.endsWith(".html")) return "text/html; charset=utf-8";
+        if (rel.endsWith(".js")) return "text/javascript; charset=utf-8";
+        if (rel.endsWith(".css")) return "text/css; charset=utf-8";
+        if (rel.endsWith(".png")) return "image/png";
+        return "image/jpeg";
+    }
+
+    private static byte[] readAll(InputStream in) throws IOException {
+        try (InputStream src = in) {
+            ByteArrayOutputStream b = new ByteArrayOutputStream();
+            byte[] buf = new byte[64 * 1024];
+            int r;
+            while ((r = src.read(buf)) > 0) b.write(buf, 0, r);
+            return b.toByteArray();
+        }
     }
 
     private void stream(String method, String range, OutputStream out) throws Exception {

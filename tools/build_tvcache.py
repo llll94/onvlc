@@ -1,4 +1,4 @@
-"""Compila o app TV Cache (pasta android\\) e instala na Mi Box.
+"""Compila o app da Mi Box (pasta android\\: biblioteca onVLC + TV Cache) e instala.
 
 Sem Gradle: javac → d8 → aapt2 → zipalign → apksigner, direto com o JDK 17 e o kit Android.
 Uso: python tools\\build_tvcache.py [--no-install]
@@ -56,9 +56,14 @@ def main():
     class_files = [str(p) for p in classes.rglob("*.class")]
     run(bt / "d8.bat", "--release", "--min-api", "26", "--lib", android_jar, "--output", dex, *class_files, env=env)
 
+    res_zip = OUT / "res.zip"
+    run(bt / "aapt2.exe", "compile", "--dir", SRC / "res", "-o", res_zip)
+    # uma cópia da tela da biblioteca vai dentro do app, para a primeira vez sem PC
+    assets = OUT / "assets"
+    shutil.copytree(ROOT / "tvui", assets / "tvui")
     base = OUT / "base.apk"
     run(bt / "aapt2.exe", "link", "-o", base, "-I", android_jar, "--manifest", SRC / "AndroidManifest.xml",
-        "--min-sdk-version", "26", "--target-sdk-version", "34")
+        "--min-sdk-version", "26", "--target-sdk-version", "34", "-A", assets, res_zip)
     with zipfile.ZipFile(base, "a") as z:
         z.write(dex / "classes.dex", "classes.dex")
 
