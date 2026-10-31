@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,7 @@ import (
 //	GET  /api/state                 só o que muda sozinho: versão do catálogo, posições, "continuar", "lendo"
 //	GET  /api/media?path=           (só do próprio PC) um arquivo qualquer: id, posição, retomada, legendas
 //	GET  /api/thumbs/<id>           começa as miniaturas e diz quais já existem
+//	GET  /api/thumbs?path=&dur=     (só do próprio PC) o mesmo para um arquivo qualquer: {id, n, have}
 //	GET  /img/<arquivo>             capas, fundos, logos, quadros; /img/thumb_<id>_<n>.jpg
 //	GET  /sub/<id>/<n>              legenda em arquivo
 //	GET  /v/<id>/<tamanho>/<nome>   o vídeo, com Range
@@ -86,6 +88,14 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		s.json(w, r, s.lib.media(r.URL.Query().Get("path")), false)
 		return
+	case "/api/thumbs":
+		if !local(r) {
+			w.WriteHeader(403)
+			return
+		}
+		dur, _ := strconv.ParseFloat(r.URL.Query().Get("dur"), 64)
+		s.json(w, r, s.lib.pathThumbs(r.URL.Query().Get("path"), dur), false)
+		return
 	case "/", "/tv", "/tv/":
 		p = "/tv/index.html"
 	}
@@ -107,7 +117,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.json(w, r, map[string]any{"n": 0, "have": []int{}}, false)
 			return
 		}
-		n, have := s.lib.thumbs.start(rec)
+		n, have := s.lib.thumbs.start(rec.ID, rec.Path, rec.Dur, rec.HDR)
 		s.json(w, r, map[string]any{"n": n, "have": have}, false)
 		return
 	}
@@ -307,6 +317,43 @@ func (l *Library) state() map[string]any {
 	}
 	return map[string]any{"version": out.Version, "busy": out.Busy, "continue": out.Continue, "pos": pos, "history": h}
 }
+
+// pathThumbs: miniaturas de um arquivo qualquer que o player do PC abriu. Da biblioteca, usa o mesmo id da TV;
+// de fora, um id pelo caminho e um ffprobe para saber se é HDR (guardado: só na primeira vez).
+func (l *Library) pathThumbs(path string, dur float64) map[string]any {
+	path = filepath.Clean(path)
+	id, hdr := "", false
+	if rec := l.byPath(path); rec != nil {
+		id, hdr = rec.ID, rec.HDR
+		if dur <= 0 {
+			dur = rec.Dur
+		}
+	} else {
+		id = md5hex(strings.ToLower(path))[:16]
+		hdrMu.Lock()
+		h, ok := hdrOf[path]
+		hdrMu.Unlock()
+		if !ok {
+			if info := probe(path); info != nil {
+				h = info.HDR
+				if dur <= 0 {
+					dur = info.Dur
+				}
+			}
+			hdrMu.Lock()
+			hdrOf[path] = h
+			hdrMu.Unlock()
+		}
+		hdr = h
+	}
+	n, have := l.thumbs.start(id, path, dur, hdr)
+	return map[string]any{"id": id, "n": n, "have": have}
+}
+
+var (
+	hdrMu sync.Mutex
+	hdrOf = map[string]bool{}
+)
 
 // media: o que o player do PC precisa de um arquivo qualquer (dentro ou fora da pasta da biblioteca).
 func (l *Library) media(path string) map[string]any {

@@ -921,7 +921,7 @@ Item {
                     Text {
                         anchors.right: parent.right; anchors.rightMargin: 10
                         anchors.verticalCenter: parent.verticalCenter
-                        text: (f.score || 0) + "% parecido"
+                        text: f.score ? f.score + "% parecido" : ""  // da biblioteca vem o idioma no nome, sem nota
                         color: f.score >= 80 ? root.green : root.mutedText
                         font.family: root.monoFont; font.pixelSize: 12
                     }
@@ -938,7 +938,7 @@ Item {
                 visible: !(s.found || []).length
                 width: parent.width
                 wrapMode: Text.Wrap
-                text: "Nenhum .srt com nome parecido na pasta do vídeo nem nas subpastas Subs ou Legendas."
+                text: "Nenhuma legenda na pasta do vídeo nem nas subpastas Subs ou Legendas."
                 color: root.mutedText; font.family: root.uiFont; font.pixelSize: 13
             }
             Item { width: 1; height: 6 }

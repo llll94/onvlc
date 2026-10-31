@@ -26,8 +26,8 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
    (ícone na bandeja), que lê a pasta **`C:\Users\lucas\Videos\onVLC`** (vigiada pelo Windows, `ReadDirectoryChangesW`,
    + conferência a cada 10 min), busca dados no TMDB e serve tudo na porta **8780** para a TV e para o PC.
    Substituiu o `library.py` em 2026-10-31 com os mesmos arquivos de dados e as mesmas rotas.
-   O onVLC abre esse processo ao iniciar; ele continua rodando depois de fechar a janela, até reiniciar o PC
-   (o Lucas **não** quis que abrisse com o Windows).
+   **Abre com o Windows** (só ela, desde 2026-10-31: `HKCU\…\Run` "onVLC biblioteca" → `dist\onVLC\onvlc-biblioteca.exe`,
+   criado pelo `build.py`); o player continua abrindo só quando o Lucas quer. O onVLC também abre a biblioteca se ela não estiver no ar.
 3. **App da Mi Box** (`android\`, pacote `com.lucas.tvcache`, nome "onVLC"): tela inicial da TV com a biblioteca (página
    `tvui\` num WebView) e **player próprio com libVLC 3.7.7** (sem usar o app do VLC). Inclui o cache em blocos (TV Cache).
 
@@ -40,20 +40,20 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
 
 | Arquivo | O que faz |
 |---|---|
-| `main.py` | Player do PC (classe `Player`), slots chamados pelo QML; abre a biblioteca (`library.start_detached()`) numa thread antes da janela. Estado por **avisos do VLC** (`_on_vlc`: Playing/Paused/EndReached/LengthChanged/ES*), não por polling: o `tick` (250 ms) só lê a posição com vídeo tocando e janela à vista e emite `posChanged` (propriedade `pos`), sem mandar o estado inteiro; `_changed()` manda o estado quando algo muda. `libraryOpenVideo(path, pos)`. Avisos do Qt/QML vão para o `onvlc.log` |
+| `main.py` | Player do PC (classe `Player`), slots chamados pelo QML; abre a biblioteca (`library.start_detached()`) numa thread antes da janela. Estado por **avisos do VLC** (`_on_vlc`: Playing/Paused/EndReached/LengthChanged/ES*), não por polling: o `tick` (250 ms) só lê a posição com vídeo tocando e janela à vista e emite `posChanged` (propriedade `pos`), sem mandar o estado inteiro; `_changed()` manda o estado quando algo muda. `libraryOpenVideo(path, pos)`. **Legendas e miniaturas vêm da biblioteca** (`_fetch_media` → `/api/media`, `_fetch_thumbs` → `/api/thumbs?path=`): mesmas legendas e nomes da TV, a em português entra ligada; VLC com `--no-sub-autodetect-file`. Biblioteca fora: volta ao `_find_subs` e ao `thumbs.py` locais. Avisos do Qt/QML vão para o `onvlc.log` |
 | `ui\Overlay.qml` | Toda a interface do PC; `libraryOpen` + `Loader` do `Library.qml` (só existe aberta); a linha do tempo usa `player.pos`; menu montado uma vez (`menuList`) |
-| `ui\Library.qml` | Biblioteca do PC: canvas 1920×1080 escalado com as medidas do `tvui\style.css`; lê `/api/library` com ETag a cada 30 s (só aberta); 3 fileiras, destaque ao passar o mouse (sem rolar a fileira), rodinha troca de fileira, setas ‹ › / Shift+rodinha andam na fileira, página do filme/série/indisponível com "‹ Voltar" (e botão voltar do mouse/Esc); imagens decodificadas no tamanho do card; arrastar move a janela. Para ver sem abrir janela: `QT_QPA_PLATFORM=offscreen` + `QT_QPA_FONTDIR=C:\Windows\Fonts` + `grabWindow()` (a fonte variável do Windows sai errada nesse modo; usar "Segoe UI" só na prévia) |
+| `ui\Library.qml` | Biblioteca do PC: canvas 1920×1080 escalado com as medidas do `tvui\style.css`; lê `/api/library` com ETag a cada 30 s (só aberta); 3 fileiras, destaque ao passar o mouse (sem rolar a fileira), rodinha troca de fileira, setas ‹ › / Shift+rodinha andam na fileira, página do filme/série/indisponível com "‹ Voltar" (e botão voltar do mouse/Esc); imagens decodificadas no tamanho do card, cantos arredondados por `MultiEffect` (só com placa de vídeo; sem ela ficam retos); arrastar move a janela. Para ver sem abrir janela: `QT_QPA_PLATFORM=offscreen` + `QT_QPA_FONTDIR=C:\Windows\Fonts` + `grabWindow()` (a fonte variável do Windows sai errada nesse modo; usar "Segoe UI" só na prévia) |
 | `server\*.go` | Biblioteca em Go: `names.go` (nome do arquivo, legendas, idioma), `probe.go` (ffprobe/ffmpeg), `tmdb.go` (TMDB pt-BR, nova tentativa com espera crescente, chave lida do Gerenciador de Credenciais), `library.go` (índice, varredura, regras `isEnd`/`resumeAt`, assistidos), `listing.go` (`/api/library`), `positions.go` (posições no registro, mesmo lugar do player), `thumbs.go`, `watch.go` (vigia da pasta), `http.go` (rotas), `main.go` (porta exclusiva, bandeja). `ONVLC_PORT` muda a porta (testes) |
 | `library.py` | Lado do player: `LIB_DIR`, `is_sample`, `running()`, `start_detached()` (abre o `onvlc-biblioteca.exe`) |
 | `tvfolder.py` | Painel "Pasta onVLC" do PC: lista com nome da TV e estado; "Mandar para a TV" = hardlink na pasta (mesmo disco) ou cópia; lixeira; `find_tool` (ffmpeg); `VIDEO_EXTS` |
 | `tvstream.py` | **Assistir na TV** (do PC): adb, Wake-on-LAN, liga TV por HDMI-CEC, `open_library(id, pos)` / `stop_library()` = `am start` no `LibraryActivity` com extras `play`/`pos` ou `stop` |
-| `thumbs.py` | Miniaturas da linha do tempo (200 quadros-chave, HDR com tonemap), usadas no PC e servidas à TV |
+| `thumbs.py` | Miniaturas no PC só quando a biblioteca está fora (normalmente é o `server\thumbs.go`, até 3 vídeos ao mesmo tempo) |
 | `opensubs.py` | Legendas do OpenSubtitles (falta o Lucas criar conta/chave) |
 | `tvui\index.html`, `app.js`, `style.css` | Página da biblioteca (1920×1080 escalada; sem filtros/máscaras/sombras animadas no CSS; capas `loading=lazy`; a cada 30 s pede `api/state` e só baixa a lista inteira quando muda; destaque não recria o logo). Tela inicial sem abas, só 3 linhas: Continuar assistindo / Mídias (tudo, mais novo primeiro) / Vocês já assistiram (montada uma vez e reaproveitada); sem favoritos. Página do filme/série, indisponível, procurando PC. Modo PC com `?pc=1` |
 | `tvui\player.js` | Interface do player da TV (barra única com trecho guardado, miniatura ao procurar, painel áudio/legendas com rolagem, pausado, próximo episódio, nova tentativa se travar) |
 | `android\src\…\LibraryActivity.java` | Atividade da tela inicial: WebView transparente + `VideoPlayer` atrás; ponte JS `window.onvlc` (play, prepare, unprepare, toggle, seek, audio, spu, stop, warm, post) |
 | `VideoPlayer.java` | libVLC (iniciado em segundo plano quando o app abre): SurfaceView vídeo + legenda, `:network-caching=400`, `:prefetch-read-size=262144`, `:prefetch-buffer-size=4096`, `:start-paused` para preparar, legendas externas como slave; busca rápida (quadro-chave); avisa a página só quando o "carregando" começa/termina; lista de faixas só refeita nos eventos ES* |
-| `CacheServer.java` | Servidor local 127.0.0.1:8090: `/stream` (blocos de 8 MB, 5 min à frente, 1 min atrás, 2 GB de vários filmes), **kit de abertura** (até 4 GB, fixado), `/ui/*` (repassa a página e a API para o PC e guarda cópia para quando o PC está desligado; imagens com cache longo), `/status` |
+| `CacheServer.java` | Servidor local 127.0.0.1:8090: `/stream` (blocos de 8 MB, 5 min à frente, 1 min atrás, 2 GB de vários filmes; bloco ainda chegando já é entregue conforme chega, `partial`), **kit de abertura** (até 4 GB, fixado), `/ui/*` (repassa a página e a API para o PC e guarda cópia para quando o PC está desligado; imagens com cache longo), `/status` |
 | `PcFinder.java` | Acha o PC: último IP salvo, senão varre x.x.x.1–254 na porta 8780 (`/api/hello`) |
 | `Progress.java` | POST da posição para o PC |
 | `CacheService.java` | Serviço em primeiro plano durante o filme |
@@ -68,7 +68,7 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
 cada vídeo tem `id, path, file, size, dur, pos, bps, quality, audio, subs, extSubs, watched, broken…`) ·
 `GET /api/state` (pequeno: `version`, `busy`, `continue`, `pos` por id, `history` recente) ·
 `GET /api/media?path=` (só 127.0.0.1: posição, `resume`, legendas de qualquer arquivo) ·
-`GET /api/thumbs/<id>` (começa as miniaturas) · `GET /img/<arquivo>`, `/img/thumb_<id>_<n>.jpg` · `GET /sub/<id>/<n>` ·
+`GET /api/thumbs/<id>` (começa as miniaturas) · `GET /api/thumbs?path=&dur=` (só 127.0.0.1: de qualquer arquivo, `{id,n,have}`) · `GET /img/<arquivo>`, `/img/thumb_<id>_<n>.jpg` · `GET /sub/<id>/<n>` ·
 `GET /v/<id>/<tamanho>/<nome>` (vídeo com Range) · `GET /tv/*` (página; `/tv/api/*` e `/tv/img/*` também valem) ·
 `POST /api/progress {id,pos,dur}` · `POST /api/watched {id|path}`.
 
@@ -107,7 +107,8 @@ cada vídeo tem `id, path, file, size, dur, pos, bps, quality, audio, subs, extS
 
 ## Números medidos (Homem-Aranha 4K HDR, 20 GB, Mi Box)
 
-2026-10-31, depois da refatoração: abertura direta **4,4 s** (antes 5,4); preparada **0,34 s** (antes 0,6); pulo de +10 s volta a tocar em **0,3 s**;
+2026-10-31, depois da refatoração: abertura direta **3,7 s** (antes 5,4); preparada **0,34 s** (antes 0,6); pulo de +10 s volta a tocar em **0,3 s**;
+pulo para trecho não guardado (50–110 min) volta a tocar em **0,2–0,9 s**;
 app abre na TV em 1,5 s; biblioteca (Go) ~19 MB de RAM; app do PC 111 MB (antes 587).
 
 Abertura direta ~5 s (2,9 s é o libVLC lendo o índice/Cues do MKV no processador da Mi Box; o buffer de 16 MB por pedido
@@ -118,10 +119,9 @@ Wi-Fi PC→Mi Box ~250 Mbps. Miniaturas: 200 em ~35 s no 4K. Kit de abertura: 66
 
 - As 4 fases do plano `onvlc-refatoracao.md` estão no GitHub. APK novo instalado na Mi Box (versão = 100 + nº de commits,
   para o Google TV atualizar ícone/banner); `.exe` novo em `dist\onVLC`.
-- Se a TV mostra "PC desligado" com o PC ligado, conferir se a biblioteca está rodando (`/api/hello`): depois de
-  reiniciar o PC ela só sobe quando o onVLC é aberto.
-- Não feito da Fase 3: servir o bloco do cache enquanto ainda baixa (ganho ~0,3 s em pulo para trecho não guardado);
-  `CacheService` continua `dataSync`.
+- Se a TV mostra "PC desligado" com o PC ligado, conferir se a biblioteca está rodando (`/api/hello`).
+- Observar: num teste logo depois de instalar o APK a página sumiu do `tvjs.py` depois do primeiro pulo (sem falha no
+  logcat, processo vivo na repetição); não se repetiu. `CacheService` continua `dataSync`.
 - No "Continuar assistindo" só ficou Devoradores de Estrelas (10:24), que não veio dos testes.
 
 ## Estado em 2026-10-30
@@ -137,7 +137,6 @@ Wi-Fi PC→Mi Box ~250 Mbps. Miniaturas: 200 em ~35 s no 4K. Kit de abertura: 66
 
 - Lucas: criar conta/chave do OpenSubtitles (legendas da internet no PC).
 - Testar séries de verdade (só testadas com episódios falsos) e o próximo episódio automático.
-- Cantos das imagens dos cards no PC ficam retos (o QML não corta pelo arredondado sem efeito extra).
 - Reservar IP fixo da Mi Box no roteador.
 - Decidir se apaga a pasta `tv-videos` do Syncthing de vez.
 - 2026-10-31: capítulos tirados do PC e da TV (o Lucas achou ruins); aviso "Mouse embaixo…" do PC tirado; favoritos tirados só da tela

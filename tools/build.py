@@ -88,9 +88,10 @@ def build_library():
 # o que a interface usa do Qt: o resto (3D, gráficos, mapas, multimídia, PDF, navegador…) entra junto no pacote
 # porque o PyInstaller copia todos os módulos de tela do Qt; depois do build ele sai
 QT_KEEP = {"Qt6Core", "Qt6Gui", "Qt6Widgets", "Qt6Network", "Qt6OpenGL", "Qt6Qml", "Qt6QmlCore", "Qt6QmlMeta",
-           "Qt6QmlModels", "Qt6QmlWorkerScript", "Qt6QmlNetwork", "Qt6Quick", "Qt6QuickShapes", "Qt6Svg", "Qt6Concurrent"}
+           "Qt6QmlModels", "Qt6QmlWorkerScript", "Qt6QmlNetwork", "Qt6Quick", "Qt6QuickShapes", "Qt6Svg", "Qt6Concurrent",
+           "Qt6QuickEffects", "Qt6ShaderTools"}
 QML_KEEP = {"QtQml", "QtQuick"}
-QTQUICK_KEEP = {"Shapes", "Window"}  # import QtQuick + QtQuick.Shapes (ícones)
+QTQUICK_KEEP = {"Shapes", "Window", "Effects"}  # import QtQuick + Shapes (ícones) + Effects (cantos dos cards)
 PLUGINS_DROP = {"qmltooling", "networkinformation", "generic", "platforminputcontexts"}
 
 
@@ -120,6 +121,12 @@ def trim(internal):
     print(f"Qt: {before / 2**20:.0f} MB -> {after / 2**20:.0f} MB")
 
 
+def start_with_windows(lib_exe):
+    """Só a biblioteca (leve, sem janela) abre quando o Windows liga: a TV acha o PC sempre, mesmo sem o player aberto."""
+    _set(r"Software\Microsoft\Windows\CurrentVersion\Run", "onVLC biblioteca", f'"{lib_exe}"')
+    print("biblioteca abre com o Windows:", lib_exe)
+
+
 def main():
     subprocess.run([sys.executable, str(ROOT / "tools" / "make_icon.py")], check=True)
     lib_exe = build_library()
@@ -144,6 +151,7 @@ def main():
         subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True)
         print("atalho:", lnk)
     register_app(exe)
+    start_with_windows(exe.with_name(lib_exe.name))
     remove_old_name()
     print("pronto:", exe)
 

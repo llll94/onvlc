@@ -14,21 +14,27 @@ import (
 
 // Miniaturas da linha do tempo: ao abrir um vídeo, o ffmpeg tira um quadro pequeno de cada trecho em segundo
 // plano (só quadros-chave, ~0,4 s cada mesmo num 4K), do grosso para o fino: primeiro quadros espalhados pelo
-// filme inteiro, depois os do meio. Mesma pasta e mesmos nomes do thumbs.py.
+// filme inteiro, depois os do meio. Servem a TV (vídeos da biblioteca, por id) e o player do PC (qualquer
+// arquivo, por caminho). Até 3 vídeos ao mesmo tempo: a TV e o PC não se atrapalham.
 const (
 	thumbCount   = 200 // quadros por vídeo (um a cada ~40 s num filme de 2 h)
 	thumbWidth   = 240
-	thumbKeep    = 60 // vídeos guardados; os mais antigos saem
+	thumbKeep    = 60 // vídeos guardados no disco; os mais antigos saem
 	thumbWorkers = 2
+	thumbActive  = 3 // vídeos com miniaturas em andamento ao mesmo tempo
 )
 
-type thumbs struct {
-	mu   sync.Mutex
-	id   string // vídeo atual
+type thumbJob struct {
 	dir  string
 	n    int
 	have map[int]bool
 	stop context.CancelFunc
+	used time.Time
+}
+
+type thumbs struct {
+	mu   sync.Mutex
+	jobs map[string]*thumbJob // id → trabalho
 }
 
 // order: índices do grosso para o fino: 0, n/2, n/4, 3n/4, ...
@@ -49,58 +55,80 @@ func order(n int) []int {
 }
 
 // start começa (ou continua) as miniaturas de um vídeo; devolve quantas serão e quais já existem.
-func (t *thumbs) start(r *record) (int, []int) {
+func (t *thumbs) start(id, path string, dur float64, hdr bool) (int, []int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.id != r.ID {
-		if t.stop != nil {
-			t.stop()
-		}
-		t.id, t.dir, t.n, t.have = r.ID, "", 0, map[int]bool{}
+	if t.jobs == nil {
+		t.jobs = map[string]*thumbJob{}
+	}
+	j := t.jobs[id]
+	if j == nil {
+		j = &thumbJob{have: map[int]bool{}}
 		ffmpeg := findTool("ffmpeg")
-		st, err := os.Stat(r.Path)
-		if ffmpeg != "" && err == nil && r.Dur > 0 {
-			key := md5hex(strings.ToLower(r.Path) + "|" + strconv.FormatInt(st.Size(), 10) + "|" + strconv.FormatInt(st.ModTime().Unix(), 10))
-			t.dir = filepath.Join(thumbDir, key)
-			os.MkdirAll(t.dir, 0o755)
+		st, err := os.Stat(path)
+		if ffmpeg != "" && err == nil && dur > 0 {
+			// mesma pasta e mesmos nomes do thumbs.py (as miniaturas já feitas continuam valendo)
+			key := md5hex(strings.ToLower(path) + "|" + strconv.FormatInt(st.Size(), 10) + "|" + strconv.FormatInt(st.ModTime().Unix(), 10))
+			j.dir = filepath.Join(thumbDir, key)
+			os.MkdirAll(j.dir, 0o755)
 			now := time.Now()
-			os.Chtimes(t.dir, now, now) // marca como usado agora, para a limpeza
-			t.n = max(1, min(thumbCount, int(r.Dur/5)))
-			entries, _ := os.ReadDir(t.dir)
+			os.Chtimes(j.dir, now, now) // marca como usado agora, para a limpeza
+			j.n = max(1, min(thumbCount, int(dur/5)))
+			entries, _ := os.ReadDir(j.dir)
 			for _, e := range entries {
 				if i, err := strconv.Atoi(strings.TrimSuffix(e.Name(), ".jpg")); err == nil && strings.HasSuffix(e.Name(), ".jpg") {
-					t.have[i] = true
+					j.have[i] = true
 				}
 			}
 			var todo []int
-			for _, i := range order(t.n) {
-				if !t.have[i] {
+			for _, i := range order(j.n) {
+				if !j.have[i] {
 					todo = append(todo, i)
 				}
 			}
 			if len(todo) > 0 {
 				ctx, cancel := context.WithCancel(context.Background())
-				t.stop = cancel
-				go t.run(ctx, r.ID, r.Path, r.Dur, r.HDR, t.dir, t.n, todo)
+				j.stop = cancel
+				go t.run(ctx, j, path, dur, hdr, todo)
 			}
 		}
+		t.jobs[id] = j
+		t.evict()
 	}
-	have := make([]int, 0, len(t.have))
-	for i := range t.have {
+	j.used = time.Now()
+	have := make([]int, 0, len(j.have))
+	for i := range j.have {
 		have = append(have, i)
 	}
 	sort.Ints(have)
-	return t.n, have
+	return j.n, have
 }
 
-func (t *thumbs) run(ctx context.Context, id, path string, dur float64, hdr bool, dir string, n int, todo []int) {
+// evict: com mais de thumbActive vídeos, para e esquece o usado há mais tempo (chamar com o lock).
+func (t *thumbs) evict() {
+	for len(t.jobs) > thumbActive {
+		var oldID string
+		var old *thumbJob
+		for id, j := range t.jobs {
+			if old == nil || j.used.Before(old.used) {
+				oldID, old = id, j
+			}
+		}
+		if old.stop != nil {
+			old.stop()
+		}
+		delete(t.jobs, oldID)
+	}
+}
+
+func (t *thumbs) run(ctx context.Context, j *thumbJob, path string, dur float64, hdr bool, todo []int) {
 	prune()
 	ffmpeg := findTool("ffmpeg")
 	vf := "scale=" + strconv.Itoa(thumbWidth) + ":-2"
 	if hdr {
 		vf = hdrFilter(thumbWidth)
 	}
-	step := dur / float64(n)
+	step := dur / float64(j.n)
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	for w := 0; w < thumbWorkers; w++ {
@@ -108,8 +136,8 @@ func (t *thumbs) run(ctx context.Context, id, path string, dur float64, hdr bool
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				out := filepath.Join(dir, strconv.Itoa(i)+".jpg")
-				tmp := filepath.Join(dir, strconv.Itoa(i)+".tmp.jpg")
+				out := filepath.Join(j.dir, strconv.Itoa(i)+".jpg")
+				tmp := filepath.Join(j.dir, strconv.Itoa(i)+".tmp.jpg")
 				c, cancel := context.WithTimeout(ctx, 30*time.Second)
 				_ = command(c, true, ffmpeg, "-hide_banner", "-v", "error", "-y", "-skip_frame", "nokey",
 					"-ss", strconv.FormatFloat((float64(i)+0.5)*step, 'f', 1, 64), "-i", path, "-map", "0:v:0",
@@ -117,9 +145,7 @@ func (t *thumbs) run(ctx context.Context, id, path string, dur float64, hdr bool
 				cancel()
 				if st, err := os.Stat(tmp); err == nil && st.Size() > 0 && os.Rename(tmp, out) == nil {
 					t.mu.Lock()
-					if t.id == id {
-						t.have[i] = true
-					}
+					j.have[i] = true
 					t.mu.Unlock()
 				} else {
 					os.Remove(tmp)
@@ -141,14 +167,15 @@ func (t *thumbs) run(ctx context.Context, id, path string, dur float64, hdr bool
 	debug.FreeOSMemory()
 }
 
-// file: o arquivo de uma miniatura do vídeo atual, se já existe.
+// file: o arquivo de uma miniatura, se já existe.
 func (t *thumbs) file(id string, i int) string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.id != id || !t.have[i] {
+	j := t.jobs[id]
+	if j == nil || !j.have[i] {
 		return ""
 	}
-	return filepath.Join(t.dir, strconv.Itoa(i)+".jpg")
+	return filepath.Join(j.dir, strconv.Itoa(i)+".jpg")
 }
 
 func prune() {

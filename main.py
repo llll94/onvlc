@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -96,6 +97,7 @@ class Player(QObject):
     posChanged = Signal()  # só a posição (várias vezes por segundo, sem mandar o estado inteiro para a tela)
     toast = Signal(str)
     _vlcEvent = Signal(str)  # avisos do motor do VLC, que chegam de outra thread
+    _mediaInfo = Signal(object)  # legendas e miniaturas que a biblioteca achou para o vídeo aberto
     _webResult = Signal(object)  # resposta do OpenSubtitles, vinda de outra thread
     _tvState = Signal(object)  # estado da pasta onVLC, vindo de outra thread
     _watchState = Signal(object)  # estado do Assistir na TV, vindo de outra thread
@@ -106,7 +108,7 @@ class Player(QObject):
         self.app = app
         self.settings = QSettings("PlayerLucas", "Player")
         self.os_configured = bool(self._secret("api_key"))
-        self.vlc = vlc.Instance(["--quiet", "--no-video-title-show", "--sub-autodetect-fuzzy=3"])
+        self.vlc = vlc.Instance(["--quiet", "--no-video-title-show", "--no-sub-autodetect-file"])
         self.mp = self.vlc.media_player_new()
         self.mp.video_set_mouse_input(False)
         self.mp.video_set_key_input(False)
@@ -124,8 +126,10 @@ class Player(QObject):
         self.pending_resume = None
         self.ticks = 0
         self.os_client = None
-        self.thumbs = thumbs.Thumbs()
+        self.thumbs = thumbs.Thumbs()  # só quando a biblioteca está desligada
         self.thumbs_for = None
+        self.lib_thumbs = None  # {"path", "id", "n", "have"}: miniaturas feitas pela biblioteca
+        self._mediaInfo.connect(self._on_media_info)
         self._webResult.connect(self._on_web)
         self.st = {"tv": {}}
         self._reset_media_state()
@@ -289,7 +293,7 @@ class Player(QObject):
             self.st["dur"] = dur
             if self.thumbs_for != self.path:
                 self.thumbs_for = self.path
-                self.thumbs.start(self.path, dur)
+                self._fetch_thumbs(self.path, dur)
             if self.pending_resume is not None:
                 at = self.pending_resume
                 self.pending_resume = None
@@ -315,8 +319,71 @@ class Player(QObject):
 
     @Slot(float, result=str)
     def thumbAt(self, sec):
+        lt = self.lib_thumbs
+        if lt and lt["path"] == self.path:
+            have, dur = lt["have"], self.st.get("dur") or 0
+            if not have or dur <= 0:
+                return ""
+            want = max(0, min(lt["n"] - 1, int(sec / dur * lt["n"])))
+            best = min(have, key=lambda i: abs(i - want))
+            return f"http://127.0.0.1:8780/img/thumb_{lt['id']}_{best}.jpg"
         f = self.thumbs.at(sec)
         return QUrl.fromLocalFile(f).toString() if f else ""
+
+    def _fetch_thumbs(self, path, dur):
+        """A biblioteca faz as miniaturas (as mesmas que a TV usa). Pergunta de novo enquanto ela gera;
+        5 vezes seguidas sem nenhuma nova, para. Biblioteca desligada: o player faz sozinho, como antes."""
+        def work():
+            still = 0
+            while self.path == path:
+                try:
+                    q = urllib.parse.urlencode({"path": path, "dur": f"{dur:.1f}"})
+                    with urllib.request.urlopen(f"http://127.0.0.1:8780/api/thumbs?{q}", timeout=5) as r:
+                        d = json.load(r)
+                except Exception:
+                    if self.lib_thumbs is None and self.path == path:
+                        log.info("miniaturas: biblioteca fora, o player faz")
+                        self.thumbs.start(path, dur)
+                    return
+                before = len(self.lib_thumbs["have"]) if self.lib_thumbs else 0
+                self.lib_thumbs = {"path": path, "id": d["id"], "n": d["n"] or 1, "have": d["have"]}
+                if d["n"] and len(d["have"]) >= d["n"]:
+                    return
+                still = still + 1 if len(d["have"]) <= before else 0
+                if still >= 5:
+                    return
+                time.sleep(4)
+        threading.Thread(target=work, daemon=True).start()
+
+    # ---------- legendas: as mesmas da TV ----------
+    def _fetch_media(self, path, announce=False):
+        """Pergunta à biblioteca quais legendas o vídeo tem (mesmas regras e nomes da TV), fora da thread da tela."""
+        def work():
+            try:
+                q = urllib.parse.urlencode({"path": path})
+                with urllib.request.urlopen(f"http://127.0.0.1:8780/api/media?{q}", timeout=5) as r:
+                    subs = json.load(r).get("subs") or []
+                found = [{"name": s["name"], "path": s["path"], "where": Path(s["path"]).name} for s in subs]
+            except Exception:  # biblioteca desligada: procura aqui mesmo, como antes
+                found = self._find_subs(path)
+            self._mediaInfo.emit({"path": path, "found": found, "announce": announce})
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_media_info(self, d):
+        if d["path"] != self.path:
+            return
+        self.st["found"] = d["found"]
+        if d["announce"] and d["found"]:
+            # como na TV: a legenda em português (a do Brasil primeiro, nunca a "só falas estrangeiras") entra ligada
+            pts = [f for f in d["found"] if f["name"].startswith("Português") and "forced" not in f["where"].lower()]
+            pt = next((f for f in pts if "br" in f["where"].lower()), pts[0] if pts else None)
+            if pt:
+                self.mp.add_slave(vlc.MediaSlaveType.subtitle, QUrl.fromLocalFile(pt["path"]).toString(), True)
+                self._tracks_soon.start()
+            n = len(d["found"])
+            QTimer.singleShot(1500, lambda: self.toast.emit(
+                (f"Legenda em português ligada · " if pt else "") + f"{n} legenda{'s' if n > 1 else ''} na pasta do vídeo"))
+        self.stateChanged.emit()
 
     @staticmethod
     def _fmt(s):
@@ -340,7 +407,9 @@ class Player(QObject):
         self.mp.set_media(self.vlc.media_new_path(path))
         self.mp.play()
         self.mp.video_set_aspect_ratio(ASPECTS[self.aspect_i])
-        self.st.update(hasMedia=True, title=Path(path).stem, found=self._find_subs(path))
+        self.st.update(hasMedia=True, title=Path(path).stem, found=[])
+        self.lib_thumbs = None
+        self._fetch_media(path, announce=True)
         self.posChanged.emit()
         nxt = self.playlist[self.index + 1] if 0 <= self.index < len(self.playlist) - 1 else ""
         prv = self.playlist[self.index - 1] if self.index > 0 else ""
@@ -349,10 +418,6 @@ class Player(QObject):
         self._add_recent(path)
         self.stateChanged.emit()
         self.libraryShow.emit(False)  # abriu um vídeo: a biblioteca sai da frente
-        if self.st["found"]:
-            n = len(self.st["found"])
-            QTimer.singleShot(1500, lambda: self.toast.emit(
-                f"Achei {n} legenda{'s' if n > 1 else ''} na pasta do vídeo"))
 
     def _on_end(self):
         self.settings.remove("pos/" + self._key(self.path))
@@ -536,7 +601,7 @@ class Player(QObject):
             target = self._save_sub(r["data"], r["lang"])
             if target:
                 self.loadSub(str(target))
-                self.st["found"] = self._find_subs(self.path)
+                self._fetch_media(self.path)
                 if r["remaining"] is not None:
                     n = r["remaining"]
                     QTimer.singleShot(2600, lambda: self.toast.emit(f"Restam {n} downloads de legenda hoje"))

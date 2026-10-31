@@ -38,6 +38,9 @@ import java.util.Map;
  * sem contar nos 2 GB) os blocos que o player pede ao abrir (começo, fim com o índice e os que ele pediu
  * na primeira vez), o primeiro minuto e 1 minuto a partir de onde parou. Assim o filme abre sem esperar a rede.
  *
+ * Um bloco ainda chegando do PC já é entregue ao player conforme chega (sem esperar os 8 MB inteiros): pular para
+ * um trecho que não estava guardado volta a tocar assim que os primeiros KB chegam.
+ *
  * Bloco que sumiu do disco (o Android limpa o cache quando falta espaço) ou ficou cortado (queda de energia)
  * é descartado e baixado de novo. Com menos de 1 GB livre na Mi Box, o cache encolhe em vez de crescer.
  *
@@ -71,6 +74,7 @@ final class CacheServer {
     private long openedAt;
     private volatile int warmGen;
     private final HashSet<Long> loading = new HashSet<>();
+    private final HashMap<Long, Long> partial = new HashMap<>();  // bloco do filme aberto chegando → bytes já gravados
     private ServerSocket server;
     private String upstream, key = "", contentType = "video/x-matroska";
     private long size = -1, bps = 16_000_000L, playhead, urgent = -1;
@@ -120,6 +124,7 @@ final class CacheServer {
                 key = newKey;
                 playhead = 0;
                 blocks.clear();
+                partial.clear();
                 String prefix = key + "_";
                 for (Map.Entry<String, Long> e : store.entrySet()) {
                     if (e.getKey().startsWith(prefix)) blocks.put(Long.parseLong(e.getKey().substring(prefix.length())), e.getValue());
@@ -334,7 +339,26 @@ final class CacheServer {
         int bad = 0;
         while (pos <= end) {
             long idx = pos / BLOCK;
-            File f = waitBlock(idx, pos);
+            long off = pos - idx * BLOCK;
+            long[] avail = new long[1];
+            File f = waitData(idx, pos, off, avail);
+            if (avail[0] >= 0) {  // bloco ainda chegando: manda o que já tem e volta a esperar o resto
+                try (RandomAccessFile raf = new RandomAccessFile(f, "r")) {
+                    long n = Math.min(avail[0] - off, end - pos + 1);
+                    raf.seek(off);
+                    while (n > 0) {
+                        int r = raf.read(buf, 0, (int) Math.min(buf.length, n));
+                        if (r <= 0) break;
+                        out.write(buf, 0, r);
+                        n -= r;
+                        pos += r;
+                    }
+                } catch (java.io.FileNotFoundException gone) {
+                    // acabou de chegar (o .tmp virou .blk) ou falhou: a próxima volta acha o bloco certo
+                }
+                out.flush();
+                continue;
+            }
             long want = Math.min(total, (idx + 1) * BLOCK) - idx * BLOCK;
             if (f.length() != want) {
                 // apagado pelo Android ou cortado: descarta e espera baixar de novo
@@ -346,7 +370,6 @@ final class CacheServer {
                 continue;
             }
             try (RandomAccessFile raf = new RandomAccessFile(f, "r")) {
-                long off = pos - idx * BLOCK;
                 long n = Math.min(raf.length() - off, end - pos + 1);
                 if (n <= 0) throw new IOException("bloco curto");
                 raf.seek(off);
@@ -374,15 +397,25 @@ final class CacheServer {
         }
     }
 
-    /** Espera o bloco ficar pronto; quem pede um bloco que falta passa na frente da fila. */
-    private File waitBlock(long idx, long pos) throws Exception {
+    /**
+     * Espera dados do bloco a partir de `off`; quem pede um bloco que falta passa na frente da fila.
+     * Bloco pronto: devolve o .blk e avail[0] = -1. Ainda chegando: devolve o .tmp e avail[0] = bytes já gravados.
+     */
+    private File waitData(long idx, long pos, long off, long[] avail) throws Exception {
         synchronized (lock) {
             // leituras no fim do arquivo (índice do MKV) não mudam o ponto que está tocando
             if (pos < size - 2 * BLOCK) playhead = pos;
             ensureRunning();
             lock.notifyAll();
             long t0 = System.currentTimeMillis();
+            avail[0] = -1;
             while (!blocks.containsKey(idx)) {
+                Long got = partial.get(idx);
+                if (got != null && got > off) {
+                    avail[0] = got;
+                    if (System.currentTimeMillis() - openedAt < 15000 && asked.add(idx)) learn(key, idx);
+                    return new File(dir, key + "_" + idx + ".tmp");
+                }
                 urgent = idx;
                 lock.notifyAll();
                 lock.wait(500);
@@ -587,15 +620,24 @@ final class CacheServer {
             throw new IOException("pedaço de outro arquivo: " + cr);
         }
         boolean ok = false;
+        boolean mine;
+        synchronized (lock) {
+            mine = k.equals(key);
+            if (mine) partial.put(idx, 0L);
+        }
         try (InputStream in = c.getInputStream(); FileOutputStream out = new FileOutputStream(tmp)) {
             byte[] buf = new byte[256 * 1024];
             long got = 0;
             int r;
             while ((r = in.read(buf)) > 0) {
-                out.write(buf, 0, r);
+                out.write(buf, 0, r);  // sem buffer na frente: quem lê o .tmp já vê estes bytes
                 got += r;
                 synchronized (lock) {
                     downloaded += r;
+                    if (mine && k.equals(key)) {
+                        partial.put(idx, got);
+                        lock.notifyAll();
+                    }
                 }
                 if (Thread.currentThread().isInterrupted()) throw new IOException("cancelado");
             }
@@ -603,6 +645,9 @@ final class CacheServer {
             out.getFD().sync();  // no disco de verdade antes de valer: uma queda de energia não deixa bloco cortado
             ok = true;
         } catch (IOException e) {
+            synchronized (lock) {
+                if (mine && k.equals(key)) partial.remove(idx);
+            }
             tmp.delete();
             throw e;
         } finally {
@@ -610,8 +655,10 @@ final class CacheServer {
             if (!ok) c.disconnect();
         }
         synchronized (lock) {
+            if (mine && k.equals(key)) partial.remove(idx);
             if (!tmp.renameTo(dst)) {
                 tmp.delete();
+                lock.notifyAll();
                 return;
             }
             long now = System.currentTimeMillis();

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Effects
 
 // A biblioteca da TV dentro do onVLC do PC: o mesmo desenho da tela da TV (1920×1080, escalado para a janela),
 // feito para o mouse. Lista e imagens vêm da biblioteca (onvlc-biblioteca.exe) em 127.0.0.1:8780.
@@ -382,6 +383,15 @@ Item {
                 radius: 14
                 color: "#1c1c1f"
                 clip: true
+                // cantos arredondados de verdade (o clip do QML é sempre reto): a máscara corta tudo pelo arredondado.
+                // Precisa da placa de vídeo; sem ela (desenho por software) fica reto em vez de sumir.
+                layer.enabled: GraphicsInfo.api !== GraphicsInfo.Software
+                layer.effect: MultiEffect {
+                    maskEnabled: true
+                    maskSource: cardMask
+                    maskThresholdMin: 0.5
+                    maskSpreadAtMin: 1.0
+                }
                 Image {
                     anchors.fill: parent
                     source: lib.img(card.src || card.fallback)
@@ -454,6 +464,14 @@ Item {
                     color: Qt.rgba(0, 0, 0, 0.7)
                     Text { anchors.centerIn: parent; text: "✓"; color: lib.orange; font.pixelSize: 20; font.weight: Font.ExtraBold }
                 }
+            }
+            Rectangle {
+                id: cardMask
+                anchors.fill: parent
+                radius: 14
+                visible: false
+                layer.enabled: true
+                layer.smooth: true
             }
             Rectangle {  // anel do foco
                 anchors.fill: parent; anchors.margins: -5
