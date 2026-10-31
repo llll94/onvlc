@@ -107,7 +107,7 @@ cada vídeo tem `id, path, file, size, dur, pos, bps, quality, audio, subs, extS
 
 ## Números medidos (Homem-Aranha 4K HDR, 20 GB, Mi Box)
 
-2026-10-31, depois da refatoração: abertura direta **4,4 s** (antes 5,4); pulo de +10 s volta a tocar em **0,3 s**;
+2026-10-31, depois da refatoração: abertura direta **4,4 s** (antes 5,4); preparada **0,34 s** (antes 0,6); pulo de +10 s volta a tocar em **0,3 s**;
 app abre na TV em 1,5 s; biblioteca (Go) ~19 MB de RAM; app do PC 111 MB (antes 587).
 
 Abertura direta ~5 s (2,9 s é o libVLC lendo o índice/Cues do MKV no processador da Mi Box; o buffer de 16 MB por pedido
@@ -116,9 +116,10 @@ Wi-Fi PC→Mi Box ~250 Mbps. Miniaturas: 200 em ~35 s no 4K. Kit de abertura: 66
 
 ## Estado em 2026-10-31 (fim da sessão)
 
-- Fases 0, 1 e 2 do plano `onvlc-refatoracao.md` no GitHub; **Fase 3 commitada só localmente** (falta o "ok" do Lucas
-  para o push). APK novo instalado na Mi Box; `.exe` novo em `dist\onVLC`.
-- Não medido: abertura **preparada** do 4K depois da Fase 3 (o teste por `tvjs.py` voltou vazio duas vezes; conferir).
+- As 4 fases do plano `onvlc-refatoracao.md` estão no GitHub. APK novo instalado na Mi Box (versão = 100 + nº de commits,
+  para o Google TV atualizar ícone/banner); `.exe` novo em `dist\onVLC`.
+- Se a TV mostra "PC desligado" com o PC ligado, conferir se a biblioteca está rodando (`/api/hello`): depois de
+  reiniciar o PC ela só sobe quando o onVLC é aberto.
 - Não feito da Fase 3: servir o bloco do cache enquanto ainda baixa (ganho ~0,3 s em pulo para trecho não guardado);
   `CacheService` continua `dataSync`.
 - No "Continuar assistindo" só ficou Devoradores de Estrelas (10:24), que não veio dos testes.
