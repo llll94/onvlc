@@ -9,6 +9,7 @@
 const PL = {
   open: false, it: null, st: {}, ui: true, focus: "bar", btn: 0, scrub: null, panel: null, pIdx: [0, 0],
   pausedSince: 0, next: null, nextOff: false, thumbs: { n: 0, have: [] }, thumbTimer: 0, hideTimer: 0, lastKey: 0, streak: 0,
+  lastInput: 0,
 };
 const ICON = {
   play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>',
@@ -228,7 +229,7 @@ function plUpdate() {
     $("pl-wait-s").textContent = st.state === "opening" ? "" : "a Mi Box está guardando os próximos minutos";
   }
   // pausado há um tempo: escurece e mostra o que está assistindo
-  const pausedLong = st.state === "paused" && PL.pausedSince && Date.now() - PL.pausedSince > 2500 && !PL.panel && PL.next === null;
+  const pausedLong = plPausedLong();
   $("pl-dim").classList.toggle("on", pausedLong || !!PL.panel);
   $("pl-paused").classList.toggle("on", pausedLong);
   $("pl-ui").classList.toggle("hide", !PL.ui || pausedLong || !!PL.panel);
@@ -349,7 +350,24 @@ function plStep() {
   return PL.streak > 12 ? 60 : PL.streak > 4 ? 30 : 10;
 }
 
+// tela de espera do pausado: aparece 2,5 s depois de pausar; qualquer botão tira ela, e ela só volta depois de
+// 10 s sem mexer no controle
+function plPausedLong() {
+  if (PL.st.state !== "paused" || !PL.pausedSince || PL.panel || PL.next !== null) return false;
+  const now = Date.now();
+  return PL.lastInput > PL.pausedSince ? now - PL.lastInput > 10000 : now - PL.pausedSince > 2500;
+}
+
 function plKey(k) {
+  const wasDim = plPausedLong();
+  PL.lastInput = Date.now();
+  if (wasDim) {  // o primeiro botão só tira a tela de espera e mostra os controles (o filme continua pausado)
+    PL.ui = true;
+    plPoke();
+    plFocus();
+    plUpdate();
+    return;
+  }
   const left = k === "ArrowLeft", right = k === "ArrowRight", up = k === "ArrowUp", down = k === "ArrowDown";
   const ok = k === "Enter" || k === " ";
   const dx = left ? -1 : right ? 1 : 0, dy = up ? -1 : down ? 1 : 0;
@@ -407,6 +425,15 @@ function plKey(k) {
 }
 
 function plBack() {
+  if (plPausedLong()) {  // "voltar" na tela de espera: só tira ela
+    PL.lastInput = Date.now();
+    PL.ui = true;
+    plPoke();
+    plFocus();
+    plUpdate();
+    return true;
+  }
+  PL.lastInput = Date.now();
   if (PL.next !== null) { PL.nextOff = true; PL.next = null; plRenderNext(); return true; }
   if (PL.panel) { PL.panel = null; plRenderPanel(); plPoke(); plFocus(); plUpdate(); return true; }
   if (PL.scrub !== null) { PL.scrub = null; plUpdate(); return true; }

@@ -173,9 +173,19 @@ def start_with_windows(lib_exe):
         print("biblioteca abre com o Windows (a tarefa não pôde ser criada:", (r.stderr or r.stdout).strip(), ")")
 
 
+def stop_running():
+    """Antes de trocar os arquivos de dist\\onVLC: pausa a tarefa (senão ela reabre a biblioteca no meio do build e o
+    Windows não deixa apagar a pasta) e fecha a biblioteca e o player (autorizado pelo Lucas)."""
+    subprocess.run(["schtasks", "/Change", "/TN", TASK, "/DISABLE"], capture_output=True)
+    for name in ("onvlc-biblioteca.exe", "onVLC.exe"):
+        subprocess.run(["taskkill", "/IM", name, "/F"], capture_output=True)
+    time.sleep(1)
+
+
 def main():
     subprocess.run([sys.executable, str(ROOT / "tools" / "make_icon.py")], check=True)
     lib_exe = build_library()
+    stop_running()
     subprocess.run([
         sys.executable, "-m", "PyInstaller", str(ROOT / "main.py"),
         "--name", NAME, "--noconfirm", "--windowed", "--onedir",
@@ -197,7 +207,8 @@ def main():
         subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True)
         print("atalho:", lnk)
     register_app(exe)
-    start_with_windows(exe.with_name(lib_exe.name))
+    start_with_windows(exe.with_name(lib_exe.name))  # recria a tarefa (ligada)
+    subprocess.run(["schtasks", "/Run", "/TN", TASK], capture_output=True)  # e a biblioteca volta na hora
     remove_old_name()
     print("pronto:", exe)
 
