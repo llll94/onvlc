@@ -7,6 +7,7 @@ o menu e os quadros. As duas andam juntas.
 import ctypes
 import difflib
 import hashlib
+import json
 import logging
 import os
 import re
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 VLC_DIR = r"C:\Program Files\VideoLAN\VLC"
@@ -309,6 +311,7 @@ class Player(QObject):
 
     def _on_end(self):
         self.settings.remove("pos/" + self._key(self.path))
+        self._tell_library_watched(self.path)
         if self.repeat:
             self.open_path(self.path, self.playlist)
         elif 0 <= self.index < len(self.playlist) - 1:
@@ -317,6 +320,18 @@ class Player(QObject):
             self.mp.stop()
             self.st.update(playing=False, pos=self.st["dur"])
             self.stateChanged.emit()
+
+    @staticmethod
+    def _tell_library_watched(path):
+        """Vídeo da pasta da biblioteca visto até o fim aqui no PC: entra nos "assistidos" da TV também."""
+        def send():
+            try:
+                req = urllib.request.Request("http://127.0.0.1:8780/api/watched", data=json.dumps({"path": path}).encode(),
+                                             headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req, timeout=3).read()
+            except Exception:
+                pass  # biblioteca desligada: tudo bem
+        threading.Thread(target=send, daemon=True).start()
 
     @staticmethod
     def _key(path):

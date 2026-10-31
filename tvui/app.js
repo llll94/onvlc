@@ -43,6 +43,17 @@ function fit() {
 }
 
 // ---------- dados ----------
+const MONTHS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+function dateLabel(d) {
+  if (!d) return "";
+  const [y, m, day] = d.split("-").map(Number);
+  const ymd = x => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+  const now = new Date();
+  if (d === ymd(now)) return "hoje";
+  if (d === ymd(new Date(now - 864e5))) return "ontem";
+  return `${day} ${MONTHS[m - 1]}${y !== now.getFullYear() ? " " + y : ""}`;
+}
+
 function index() {
   byId = {};
   LIB.movies.forEach(m => { m.kind = "movie"; byId[m.id] = m; });
@@ -50,6 +61,19 @@ function index() {
     s.kind = "show";
     byId[s.id] = s;
     s.seasons.forEach(se => se.episodes.forEach(e => { e.kind = "episode"; e.show = s; byId[e.id] = e; }));
+  });
+  // assistidos: o mais recente de cada vídeo; o que saiu da pasta vira um item só para lembrar
+  const seen = new Set();
+  LIB.watchedList = [];
+  (LIB.history || []).forEach(h => {
+    if (seen.has(h.id)) return;
+    seen.add(h.id);
+    let it = byId[h.id];
+    if (!it) {
+      it = byId["h:" + h.id] = { kind: "gone", id: "h:" + h.id, title: h.title, year: h.year, poster: h.poster, backdrop: h.backdrop,
+        frame: h.frame, genres: [], overview: "Este arquivo não está mais na pasta do PC.", watched: h.date, audio: [], subs: [] };
+    }
+    LIB.watchedList.push({ it, when: h.date, ep: h.kind === "episode" ? `T${h.season}:E${h.episode}` : "" });
   });
 }
 const nameOf = it => it.kind === "episode" ? it.show.title : it.title;
@@ -94,6 +118,7 @@ function metaLine(it) {
   const q = it.kind === "show" ? (episodesOf(it)[0] || {}).quality : it.quality;
   if (q) p.push(`<span class="q">${esc(q)}</span>`);
   if (it.broken) p.push(`<span class="bad">Arquivo com problema</span>`);
+  if (it.watched) p.push(`<span class="seen-t">✓ Assistido ${dateLabel(it.watched) === "hoje" || dateLabel(it.watched) === "ontem" ? dateLabel(it.watched) : "em " + dateLabel(it.watched)}</span>`);
   return `<div class="meta">${p.join("")}</div>`;
 }
 function synopsis(text) {
@@ -108,9 +133,10 @@ function progressBits(it) {
   return `<div class="sub">Parou em ${clock(it.pos)} · faltam ${hm(left)}</div>`
     + `<div class="prog"><b style="width:${(it.pos / it.dur * 100).toFixed(1)}%"></b></div>`;
 }
-function card(it, wide, zone) {
+function card(it, wide, zone, when) {
   const k = `${zone}:${it.id}`;
-  const broken = it.broken ? `<div class="badge">Com problema</div>` : "";
+  const broken = (it.broken ? `<div class="badge">Com problema</div>` : "")
+    + (when ? `<div class="when">${esc(when)}</div>` : it.watched ? `<div class="seen">✓</div>` : "");
   if (wide) {
     let src, sub;
     if (it.kind === "episode") { src = it.still || it.show.backdrop || it.show.frame; sub = `${epLabel(it)} · ${it.title}`; }
@@ -170,6 +196,8 @@ function homeRows() {
   if (all.length > 1) rows.push({ title: "Adicionados recentemente", items: [...all].sort((a, b) => b.added - a.added).slice(0, 20) });
   if (LIB.movies.length) rows.push({ title: "Filmes", items: [...LIB.movies].sort(byTitle) });
   if (LIB.shows.length) rows.push({ title: "Séries", items: [...LIB.shows].sort(byTitle) });
+  if (LIB.watchedList.length) rows.push({ title: "Vocês já assistiram", items: LIB.watchedList.map(w => w.it),
+    when: LIB.watchedList.map(w => [w.ep, dateLabel(w.when)].filter(Boolean).join(" · ")) });
   const genres = {};
   all.forEach(it => (it.genres || []).forEach(g => (genres[g] = genres[g] || []).push(it)));
   Object.entries(genres).filter(([, v]) => v.length > 1).sort((a, b) => b[1].length - a[1].length).slice(0, 4)
@@ -205,7 +233,7 @@ function renderHome(keepKey) {
   else rows = homeRows();
   view.innerHTML = `<div class="hero" id="hero"></div>
     <div class="rows"><div class="rows-in" id="rows-in">${rows.map((r, ri) => `<section class="row">
-      <h3>${esc(r.title)}</h3><div class="cards">${r.items.map(it => card(it, r.wide, "r" + ri)).join("")}</div></section>`).join("")}
+      <h3>${esc(r.title)}</h3><div class="cards">${r.items.map((it, k) => card(it, r.wide, "r" + ri, r.when && r.when[k])).join("")}</div></section>`).join("")}
       ${rows.length ? "" : `<section class="row"><h3>${screen.tab === 1 ? "Nenhum filme ainda" : "Nenhuma série ainda"}</h3></section>`}
     </div></div>`;
   const zs = [[...$("nav").children], ...[...view.querySelectorAll(".row .cards")].map(c => [...c.children])];
@@ -237,7 +265,7 @@ function renderMovie(it, keepKey) {
   if (!it.broken) {
     if (it.pos) btns.push({ label: `Continuar de ${clock(it.pos)}`, play: true, act: () => play(it, false) },
       { label: "Do começo", act: () => play(it, true) });
-    else btns.push({ label: "Assistir", play: true, act: () => play(it, true) });
+    else btns.push({ label: it.watched ? "Assistir de novo" : "Assistir", play: true, act: () => play(it, true) });
   }
   view.innerHTML = `<div class="detail"><div class="body">
       <div class="logo">${titleBlock(it)}</div>${metaLine(it)}${synopsis(it.overview)}
@@ -339,6 +367,7 @@ function activate() {
   }
   const it = byId[el.dataset.id];
   if (!it) return;
+  if (it.kind === "gone") return toast("Este filme não está mais na pasta do PC.");
   if (it.kind === "episode") return play(it, false);
   stack.push({ screen: { ...screen }, key: el.dataset.k });
   if (it.kind === "movie") renderMovie(it);

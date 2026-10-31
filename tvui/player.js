@@ -300,7 +300,17 @@ function plRenderPanel() {
   if (PL.panel !== "tracks") return;
   const col = (list, cur, c) => list.map((o, k) =>
     `<div class="pl-opt${PL.pIdx[0] === c && PL.pIdx[1] === k ? " focus" : ""}"><i>${o.id === cur ? "✓" : ""}</i><span>${esc(o.name)}</span></div>`).join("");
-  p.innerHTML = `<div><h3>Áudio</h3>${col(plAudioList(), PL.st.audioId, 0)}</div><div><h3>Legendas</h3>${col(plSpuList(), PL.st.spuId, 1)}</div>`;
+  p.innerHTML = `<div><h3>Áudio</h3><div class="pl-list">${col(plAudioList(), PL.st.audioId, 0)}</div></div>`
+    + `<div><h3>Legendas</h3><div class="pl-list">${col(plSpuList(), PL.st.spuId, 1)}</div></div>`;
+  // listas longas (o Homem-Aranha tem 18 legendas): rola para deixar a opção em foco no meio
+  p.querySelectorAll(".pl-list").forEach((list, c) => {
+    const cur = c === 0 ? PL.st.audioId : PL.st.spuId;
+    const items = [...list.children];
+    const idx = PL.pIdx[0] === c ? PL.pIdx[1] : Math.max(0, (c === 0 ? plAudioList() : plSpuList()).findIndex(o => o.id === cur));
+    const el = items[idx];
+    list.classList.toggle("more", list.scrollHeight > list.clientHeight + 4);
+    if (el) list.scrollTop = Math.max(0, el.offsetTop - list.clientHeight / 2 + el.offsetHeight / 2);
+  });
 }
 function plRenderChaps() {
   const p = $("pl-chaps");
@@ -359,6 +369,7 @@ function plStep() {
 }
 
 function plKey(k) {
+  plLog(k);
   const left = k === "ArrowLeft", right = k === "ArrowRight", up = k === "ArrowUp", down = k === "ArrowDown";
   const ok = k === "Enter" || k === " ";
   const dx = left ? -1 : right ? 1 : 0, dy = up ? -1 : down ? 1 : 0;
@@ -424,7 +435,15 @@ function plKey(k) {
   plUpdate();
 }
 
+// registro curto dos últimos botões no player (lido pelo PC com tools\tvjs.py "KEYLOG")
+window.KEYLOG = [];
+function plLog(what) {
+  KEYLOG.push(`${new Date().toTimeString().slice(0, 8)} ${what} panel=${PL.panel} ui=${PL.ui} focus=${PL.focus} scrub=${PL.scrub !== null}`);
+  if (KEYLOG.length > 40) KEYLOG.shift();
+}
+
 function plBack() {
+  plLog("voltar");
   if (PL.next !== null) { PL.nextOff = true; PL.next = null; plRenderNext(); return true; }
   if (PL.panel) { PL.panel = null; plRenderPanel(); plRenderChaps(); plPoke(); plFocus(); plUpdate(); return true; }
   if (PL.scrub !== null) { PL.scrub = null; plUpdate(); return true; }

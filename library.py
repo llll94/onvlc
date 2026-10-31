@@ -48,6 +48,7 @@ LIB_DIR = Path(os.environ.get("ONVLC_LIBRARY") or Path.home() / "Videos" / "onVL
 DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "onVLC" / "library"
 IMG_DIR = DATA_DIR / "img"
 INDEX = DATA_DIR / "index.json"
+HISTORY = DATA_DIR / "assistidos.json"  # o que foi assistido até o fim, com a data (fica mesmo se o arquivo sair da pasta)
 UI_DIR = HERE / "tvui"
 PORT = 8780
 SCAN_EVERY = 20
@@ -493,7 +494,7 @@ class Library:
         for r in files:
             k = pos_key(r["path"])
             pos = float(s.value("pos/" + k, 0) or 0)
-            r["pos"] = pos if 30 < pos < r.get("dur", 0) - 60 else 0
+            r["pos"] = pos if 30 < pos and not is_end(pos, r.get("dur", 0)) else 0
             if r["pos"]:
                 progress.append((float(s.value("posAt/" + k, 0) or 0), r["id"]))
 
@@ -527,7 +528,18 @@ class Library:
         for o in out_shows.values():
             o["seasons"] = [{"n": n, "episodes": sorted(eps, key=lambda e: e["episode"])}
                             for n, eps in sorted(o["seasons"].items())]
+        hist = sorted(self.history(), key=lambda h: -h["at"])
+        last = {}
+        for h in hist:
+            last.setdefault(h["id"], h["date"])
+        for m in movies:
+            m["watched"] = last.get(m["id"], "")
+        for o in out_shows.values():
+            for se in o["seasons"]:
+                for e in se["episodes"]:
+                    e["watched"] = last.get(e["id"], "")
         return {"pc": socket.gethostname(), "folder": str(LIB_DIR), "busy": self.busy,
+                "history": hist[:40],
                 "tmdb": bool(self.tmdb.token),
                 "movies": sorted(movies, key=lambda m: -m["added"]),
                 "shows": sorted(out_shows.values(), key=lambda o: -o["added"]),
@@ -555,6 +567,43 @@ class Library:
             return None
         return self.thumbs.dir / f"{i}.jpg"
 
+    # ---------- assistidos ----------
+    def history(self):
+        try:
+            return json.loads(HISTORY.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+
+    def mark_watched(self, fid=None, path=None, when=None):
+        """Anota que o vídeo foi assistido até o fim (uma vez por dia por vídeo)."""
+        with self.lock:
+            r = self.files.get(fid) if fid else next((x for x in self.files.values()
+                                                      if path and x["path"].lower() == str(Path(path)).lower()), None)
+            if not r:
+                return False
+            r = dict(r)
+            show = self.shows.get(r.get("showKey") or "", {})
+        when = when or time.time()
+        day = time.strftime("%Y-%m-%d", time.localtime(when))
+        hist = self.history()
+        if any(h["id"] == r["id"] and h["date"] == day for h in hist):
+            return True
+        m = r.get("meta") or {}
+        entry = {"id": r["id"], "date": day, "at": when, "kind": r["kind"], "file": r["file"],
+                 "title": m.get("title") or (show.get("title") if r["kind"] == "episode" else None) or r["title"],
+                 "year": m.get("year") or show.get("year") or r.get("year"),
+                 "poster": m.get("poster") or show.get("poster", ""), "backdrop": m.get("backdrop") or show.get("backdrop", ""),
+                 "frame": r.get("frame", "")}
+        if r["kind"] == "episode":
+            ep = (show.get("seasons", {}).get(str(r["season"])) or {}).get(str(r["episode"]), {})
+            entry.update(season=r["season"], episode=r["episode"], epTitle=ep.get("name") or f"Episódio {r['episode']}")
+        hist.append(entry)
+        tmp = HISTORY.with_suffix(".tmp")
+        tmp.write_text(json.dumps(hist, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, HISTORY)
+        log.info("assistido: %s em %s", entry["title"], day)
+        return True
+
     def path_of(self, fid):
         with self.lock:
             r = self.files.get(fid)
@@ -566,14 +615,20 @@ class Library:
             return False
         s = _settings()
         k = pos_key(path)
-        if dur > 0 and pos > dur - 120:  # chegou nos créditos: assistido
+        if dur > 0 and is_end(pos, dur):  # chegou nos créditos: assistido
             s.remove("pos/" + k)
             s.remove("posAt/" + k)
+            self.mark_watched(fid)
         elif pos > 0:
             s.setValue("pos/" + k, float(pos))
             s.setValue("posAt/" + k, time.time())
         s.sync()
         return True
+
+
+def is_end(pos, dur):
+    """Nos créditos: últimos 6% do vídeo ou últimos 2 min (o Harriet tem 7 min de créditos)."""
+    return dur > 0 and dur - pos <= max(120, dur * 0.06)
 
 
 def _common(r):
@@ -674,6 +729,9 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             return self._send(400, {"ok": False})
+        if path == "/api/watched":  # o onVLC do PC chegou ao fim de um vídeo da biblioteca
+            ok = self.lib.mark_watched(fid=body.get("id"), path=body.get("path"))
+            return self._send(200 if ok else 404, {"ok": ok})
         if path == "/api/progress":
             ok = self.lib.set_progress(str(body.get("id", "")), float(body.get("pos") or 0), float(body.get("dur") or 0))
             return self._send(200 if ok else 404, {"ok": ok})

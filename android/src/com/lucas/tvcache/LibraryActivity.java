@@ -67,6 +67,8 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
         int k = e.getKeyCode();
+        android.util.Log.i("onvlc", "tecla " + KeyEvent.keyCodeToString(k) + (e.getAction() == KeyEvent.ACTION_UP ? " solta" : " aperta")
+                + (e.getRepeatCount() > 0 ? " repete " + e.getRepeatCount() : ""));
         // o botão "voltar" do controle chega aqui antes do WebView
         if (k == KeyEvent.KEYCODE_BACK) {
             if (e.getAction() == KeyEvent.ACTION_UP) onBackPressed();

@@ -62,6 +62,11 @@ nav .tab.focus { background: #fff; color: #111; }
 .card .prog b { display: block; height: 100%; border-radius: 3px; background: var(--o); }
 .card .badge { position: absolute; top: 12px; left: 12px; background: var(--bad); color: #fff; font-size: 17px; font-weight: 700; padding: 4px 10px; border-radius: 6px; }
 .card.broken img { filter: grayscale(1) brightness(.5); }
+.card .when { position: absolute; left: 0; right: 0; bottom: 0; padding: 34px 14px 12px; background: linear-gradient(transparent, rgba(0,0,0,.9));
+  font-size: 20px; font-weight: 700; }
+.card .seen { position: absolute; top: 10px; right: 10px; width: 36px; height: 36px; border-radius: 50%; background: rgba(0,0,0,.7);
+  color: var(--o); display: grid; place-items: center; font-weight: 800; font-size: 20px; }
+.meta .seen-t { color: var(--o); font-weight: 700; }
 
 /* tela do filme / da série */
 .detail { position: absolute; inset: 0; z-index: 3; }
@@ -155,6 +160,8 @@ html.playing #tv > .bg, html.playing #tv > .shade, html.playing #tv > .bar, html
   transform: translateX(100%); transition: transform .25s ease; overflow: hidden; }
 .pl-panel.on { transform: none; }
 .pl-panel h3 { margin: 0 0 24px; font-size: 24px; text-transform: uppercase; letter-spacing: .08em; color: rgba(255,255,255,.55); font-weight: 700; }
+.pl-list { position: relative; height: 840px; overflow: hidden; scroll-behavior: smooth; }
+.pl-list.more { -webkit-mask-image: linear-gradient(#000 85%, transparent); mask-image: linear-gradient(#000 85%, transparent); }
 .pl-opt { display: flex; align-items: center; gap: 16px; font-size: 26px; padding: 14px 20px; border-radius: 12px; margin-bottom: 6px; }
 .pl-opt i { width: 26px; flex: none; color: var(--o); font-style: normal; font-weight: 800; }
 .pl-opt span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
