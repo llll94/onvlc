@@ -100,8 +100,13 @@ def main():
     assets = OUT / "assets"
     shutil.copytree(ROOT / "tvui", assets / "tvui")
     base = OUT / "base.apk"
+    # versão nova a cada APK (pelo número de commits): a tela inicial do Google TV só troca o ícone e o banner
+    # guardados quando a versão do app muda
+    commits = subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    code = 100 + int(commits or 0)
     run(bt / "aapt2.exe", "link", "-o", base, "-I", android_jar, "--manifest", SRC / "AndroidManifest.xml",
-        "--min-sdk-version", "26", "--target-sdk-version", "34", "-A", assets, res_zip)
+        "--min-sdk-version", "26", "--target-sdk-version", "34", "--version-code", str(code),
+        "--version-name", f"3.{code}", "--replace-version", "-A", assets, res_zip)
     with zipfile.ZipFile(base, "a", zipfile.ZIP_DEFLATED) as z:
         for d in sorted(dex.glob("classes*.dex")):
             z.write(d, d.name)
