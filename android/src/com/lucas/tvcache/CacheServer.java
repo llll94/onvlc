@@ -282,6 +282,7 @@ final class CacheServer {
         if (rel.endsWith(".js")) return "text/javascript; charset=utf-8";
         if (rel.endsWith(".css")) return "text/css; charset=utf-8";
         if (rel.endsWith(".png")) return "image/png";
+        if (rel.endsWith(".svg")) return "image/svg+xml";
         return "image/jpeg";
     }
 
