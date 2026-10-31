@@ -41,6 +41,9 @@ nav .tab.focus { background: #fff; color: #111; }
 .meta .bad { color: var(--bad); font-weight: 700; }
 .syn { margin-top: 22px; font-size: 28px; line-height: 1.42; color: rgba(255,255,255,.8); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; max-width: 880px; }
 .syn.none { color: rgba(255,255,255,.45); }
+.home { display: contents; }
+.note.gone { background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.25); }
+.card.gone img { filter: grayscale(.85) brightness(.6); }
 .note { margin-top: 24px; display: inline-flex; align-items: center; gap: 16px; background: rgba(255,90,78,.14); border: 2px solid rgba(255,90,78,.5); padding: 14px 24px; border-radius: 14px; font-size: 26px; font-weight: 600; }
 
 /* linhas de capas */

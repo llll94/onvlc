@@ -62,19 +62,24 @@ function index() {
     byId[s.id] = s;
     s.seasons.forEach(se => se.episodes.forEach(e => { e.kind = "episode"; e.show = s; byId[e.id] = e; }));
   });
-  // assistidos: o mais recente de cada vídeo; o que saiu da pasta vira um item só para lembrar
+  // o que saiu da pasta continua nos assistidos e nos favoritos, como item "indisponível" (com os dados guardados)
+  const gone = (id, snap) => byId[id] || byId["h:" + id] || (byId["h:" + id] = {
+    kind: "gone", id: "h:" + id, realId: id, title: snap.title, year: snap.year, runtime: snap.runtime || 0,
+    genres: snap.genres || [], vote: snap.vote || 0, overview: snap.overview || "", poster: snap.poster || "",
+    backdrop: snap.backdrop || "", logo: snap.logo || "", frame: snap.frame || "", quality: snap.quality || "",
+    ep: snap.season ? `T${snap.season}:E${snap.episode} · ${snap.epTitle || ""}` : "", audio: [], subs: [] });
+  const favIds = new Set((LIB.favorites || []).map(f => f.id));
+  Object.values(byId).forEach(it => { it.fav = favIds.has(it.id); });
   const seen = new Set();
   LIB.watchedList = [];
   (LIB.history || []).forEach(h => {
     if (seen.has(h.id)) return;
     seen.add(h.id);
-    let it = byId[h.id];
-    if (!it) {
-      it = byId["h:" + h.id] = { kind: "gone", id: "h:" + h.id, title: h.title, year: h.year, poster: h.poster, backdrop: h.backdrop,
-        frame: h.frame, genres: [], overview: "Este arquivo não está mais na pasta do PC.", watched: h.date, audio: [], subs: [] };
-    }
+    const it = gone(h.id, h);
+    if (it.kind === "gone") it.watched = it.watched || h.date;
     LIB.watchedList.push({ it, when: h.date, ep: h.kind === "episode" ? `T${h.season}:E${h.episode}` : "" });
   });
+  LIB.favList = (LIB.favorites || []).map(f => { const it = gone(f.id, f); it.fav = true; return it; });
 }
 const nameOf = it => it.kind === "episode" ? it.show.title : it.title;
 const epLabel = e => `T${e.season}:E${e.episode}`;
@@ -85,13 +90,15 @@ function backdropOf(it) {
 function episodesOf(show) { return show.seasons.flatMap(se => se.episodes); }
 
 // ---------- fundo (troca suave entre duas camadas) ----------
-let bgCur = "", bgFlip = false;
+let bgCur = "", bgFlip = false, bgInstant = false;
 function setBg(it) {
   const [src, frame] = it ? backdropOf(it) : ["", false];
   if (src === bgCur) return;
   bgCur = src;
   bgFlip = !bgFlip;
   const on = $(bgFlip ? "bg-a" : "bg-b"), off = $(bgFlip ? "bg-b" : "bg-a");
+  // trocando de aba: sem a transição (ela deixava ver o fundo da aba anterior)
+  [on, off].forEach(el => { el.style.transition = bgInstant ? "none" : ""; });
   on.style.backgroundImage = src ? `url("${img(src)}")` : "none";
   on.classList.toggle("frame", frame);
   on.classList.add("on");
@@ -118,6 +125,7 @@ function metaLine(it) {
   const q = it.kind === "show" ? (episodesOf(it)[0] || {}).quality : it.quality;
   if (q) p.push(`<span class="q">${esc(q)}</span>`);
   if (it.broken) p.push(`<span class="bad">Arquivo com problema</span>`);
+  if (it.kind === "gone") p.push(`<span class="bad">Indisponível</span>`);
   if (it.watched) p.push(`<span class="seen-t">✓ Assistido ${dateLabel(it.watched) === "hoje" || dateLabel(it.watched) === "ontem" ? dateLabel(it.watched) : "em " + dateLabel(it.watched)}</span>`);
   return `<div class="meta">${p.join("")}</div>`;
 }
@@ -136,7 +144,8 @@ function progressBits(it) {
 function card(it, wide, zone, when) {
   const k = `${zone}:${it.id}`;
   const broken = (it.broken ? `<div class="badge">Com problema</div>` : "")
-    + (when ? `<div class="when">${esc(when)}</div>` : it.watched ? `<div class="seen">✓</div>` : "");
+    + (when ? `<div class="when">${esc(when)}${it.kind === "gone" ? " · indisponível" : ""}</div>`
+      : it.kind === "gone" ? `<div class="when">Indisponível</div>` : it.watched ? `<div class="seen">✓</div>` : "");
   if (wide) {
     let src, sub;
     if (it.kind === "episode") { src = it.still || it.show.backdrop || it.show.frame; sub = `${epLabel(it)} · ${it.title}`; }
@@ -148,7 +157,7 @@ function card(it, wide, zone, when) {
   const frame = it.kind === "episode" ? (it.still || it.show.frame) : it.frame;
   const inner = poster ? `<img src="${img(poster)}" alt="">`
     : `<img src="${img(frame)}" alt=""><div class="cap"><div class="nm">${esc(nameOf(it))}</div></div>`;
-  return `<div class="card poster${it.broken ? " broken" : ""}" data-id="${it.id}" data-k="${k}">${inner}${broken}</div>`;
+  return `<div class="card poster${it.broken ? " broken" : ""}${it.kind === "gone" ? " gone" : ""}" data-id="${it.id}" data-k="${k}">${inner}${broken}</div>`;
 }
 
 // ---------- foco ----------
@@ -179,6 +188,20 @@ function move(dx, dy) {
   }
   if (dx) cols[zi] = Math.max(0, Math.min(zones[zi].length - 1, cols[zi] + dx));
   focus();
+  const el = current();
+  clearTimeout(tabTimer);
+  if (dx && el && el.dataset.tab !== undefined && screen.name === "home") {
+    tabTimer = setTimeout(() => switchTab(+el.dataset.tab), 220);  // passando rápido por uma aba, ela não monta
+  }
+}
+let tabTimer = 0;
+function switchTab(t) {
+  if (screen.name !== "home" || screen.tab === t) return;
+  plUnprepare();
+  screen.tab = t;
+  stack.length = 0;
+  zi = 0;
+  renderHome(`nav:${t}`, true);
 }
 function scrollCards(el) {
   const strip = el.parentElement;
@@ -192,6 +215,7 @@ function homeRows() {
   const rows = [];
   const cont = LIB.continue.map(id => byId[id]).filter(Boolean);
   if (cont.length) rows.push({ title: "Continuar assistindo", items: cont, wide: true });
+  if (LIB.favList.length) rows.push({ title: "Favoritos", items: LIB.favList });
   const all = [...LIB.movies, ...LIB.shows];
   if (all.length > 1) rows.push({ title: "Adicionados recentemente", items: [...all].sort((a, b) => b.added - a.added).slice(0, 20) });
   if (LIB.movies.length) rows.push({ title: "Filmes", items: [...LIB.movies].sort(byTitle) });
@@ -214,46 +238,63 @@ function renderNav(active) {
   $("nav").innerHTML = TABS.map((t, i) => `<div class="tab${i === active ? " cur" : ""}" data-k="nav:${i}" data-tab="${i}">${t}</div>`).join("");
 }
 
-function renderHome(keepKey) {
+// cada aba é montada uma vez (até a lista mudar) e só trocada de lugar: as capas não somem e voltam
+let tabCache = { raw: null, els: [] };
+function homeEl(tab) {
+  if (tabCache.raw !== RAW) tabCache = { raw: RAW, els: [] };
+  if (tabCache.els[tab]) return tabCache.els[tab];
+  let rows;
+  if (tab === 1) rows = LIB.movies.length ? gridRows([...LIB.movies].sort(byTitle), `Filmes · ${LIB.movies.length}`) : [];
+  else if (tab === 2) rows = LIB.shows.length ? gridRows([...LIB.shows].sort(byTitle), `Séries · ${LIB.shows.length}`) : [];
+  else rows = homeRows();
+  const el = document.createElement("div");
+  el.className = "home";
+  el.innerHTML = `<div class="hero"></div>
+    <div class="rows"><div class="rows-in">${rows.map((r, ri) => `<section class="row">
+      <h3>${esc(r.title)}</h3><div class="cards">${r.items.map((it, k) => card(it, r.wide, "r" + ri, r.when && r.when[k])).join("")}</div></section>`).join("")}
+      ${rows.length ? "" : `<section class="row"><h3>${tab === 1 ? "Nenhum filme ainda" : "Nenhuma série ainda"}</h3></section>`}
+    </div></div>`;
+  el.firstItem = rows[0] && rows[0].items[0];
+  return (tabCache.els[tab] = el);
+}
+
+function renderHome(keepKey, instant) {
   screen = { name: "home", tab: screen.tab || 0 };
   renderNav(screen.tab);
   const nothing = !LIB.movies.length && !LIB.shows.length;
   if (nothing) {
     setBg(null);
     view.innerHTML = `<div class="empty"><h2>A biblioteca está vazia</h2>
-      <p>Coloque filmes e séries na pasta <b>Vídeos › onVLC TV</b> do PC (${esc(LIB.folder)}).</p>
+      <p>Coloque filmes e séries na pasta <b>Vídeos › onVLC</b> do PC (${esc(LIB.folder)}).</p>
       <p>Eles aparecem aqui sozinhos em menos de um minuto. Séries são reconhecidas pelo "S01E02" no nome.</p></div>`;
     setZones([[...$("nav").children]], keepKey || "nav:0");
     onFocus = () => {};
     return;
   }
-  let rows;
-  if (screen.tab === 1) rows = LIB.movies.length ? gridRows([...LIB.movies].sort(byTitle), `Filmes · ${LIB.movies.length}`) : [];
-  else if (screen.tab === 2) rows = LIB.shows.length ? gridRows([...LIB.shows].sort(byTitle), `Séries · ${LIB.shows.length}`) : [];
-  else rows = homeRows();
-  view.innerHTML = `<div class="hero" id="hero"></div>
-    <div class="rows"><div class="rows-in" id="rows-in">${rows.map((r, ri) => `<section class="row">
-      <h3>${esc(r.title)}</h3><div class="cards">${r.items.map((it, k) => card(it, r.wide, "r" + ri, r.when && r.when[k])).join("")}</div></section>`).join("")}
-      ${rows.length ? "" : `<section class="row"><h3>${screen.tab === 1 ? "Nenhum filme ainda" : "Nenhuma série ainda"}</h3></section>`}
-    </div></div>`;
-  const zs = [[...$("nav").children], ...[...view.querySelectorAll(".row .cards")].map(c => [...c.children])];
+  const home = homeEl(screen.tab);
+  view.replaceChildren(home);
+  const zs = [[...$("nav").children], ...[...home.querySelectorAll(".row .cards")].map(c => [...c.children])];
   onFocus = el => {
-    const rowsIn = $("rows-in");
+    const rowsIn = home.querySelector(".rows-in");
     if (!el || el.classList.contains("tab")) { rowsIn.style.transform = "translateY(0)"; return; }
     rowsIn.style.transform = `translateY(${-el.closest(".row").offsetTop}px)`;
     scrollCards(el);
     hero(byId[el.dataset.id]);
   };
   if (!keepKey) zi = 1;
+  bgInstant = !!instant;
   setZones(zs, keepKey);
-  if (zi === 0) hero(rows[0] && rows[0].items[0]);
+  if (zi === 0) hero(home.firstItem);
+  bgInstant = false;
 }
 
 function hero(it) {
   if (!it) return;
   setBg(it);
   const text = it.kind === "episode" ? (it.overview || it.show.overview) : it.overview;
-  $("hero").innerHTML = `<div class="logo">${titleBlock(it)}</div>${metaLine(it)}
+  const box = view.querySelector(".hero");
+  if (!box) return;
+  box.innerHTML = `<div class="logo">${titleBlock(it)}</div>${metaLine(it)}
     ${it.kind === "episode" ? `<div class="syn" style="-webkit-line-clamp:1">${esc(epLabel(it) + " · " + it.title)}</div>` : ""}
     ${OFFLINE ? offlineNote() : synopsis(text)}`;
 }
@@ -267,6 +308,7 @@ function renderMovie(it, keepKey) {
       { label: "Do começo", act: () => play(it, true) });
     else btns.push({ label: it.watched ? "Assistir de novo" : "Assistir", play: true, act: () => play(it, true) });
   }
+  btns.push(favButton(it));
   view.innerHTML = `<div class="detail"><div class="body">
       <div class="logo">${titleBlock(it)}</div>${metaLine(it)}${synopsis(it.overview)}
       ${it.broken ? `<div class="note">O PC não consegue abrir este arquivo. Ele pode estar incompleto ou corrompido.</div>` : offlineNote()}
@@ -294,6 +336,7 @@ function renderShow(show, season, keepKey) {
   const btns = [];
   if (started) btns.push({ label: `Continuar ${epLabel(started)}`, play: true, act: () => play(started, false) });
   else if (first) btns.push({ label: `Assistir ${epLabel(first)}`, play: true, act: () => play(first, true) });
+  btns.push(favButton(show));
   setBg(show);
   view.innerHTML = `<div class="detail"><div class="body" style="top:150px">
       <div class="logo" style="height:170px">${titleBlock(show)}</div>${metaLine(show)}
@@ -340,6 +383,7 @@ function renderSearching() {
 function render(keepKey) {
   if (!LIB) return renderSearching();
   const it = byId[screen.id];
+  if (screen.name === "gone" && it) return renderGone(it, keepKey);
   if (screen.name === "movie" && it) return renderMovie(it, keepKey);
   if (screen.name === "show" && it) return renderShow(it, screen.season, keepKey);
   renderHome(keepKey);
@@ -350,11 +394,9 @@ function activate() {
   const el = current();
   if (!el) return;
   if (el.dataset.tab !== undefined) {
-    plUnprepare();
-    screen.tab = +el.dataset.tab;
-    stack.length = 0;
-    zi = 0;
-    renderHome(`nav:${screen.tab}`);
+    clearTimeout(tabTimer);
+    if (screen.tab !== +el.dataset.tab) return switchTab(+el.dataset.tab);
+    if (zones.length > 1) { zi = 1; cols[1] = 0; focus(); }  // OK na aba já aberta: desce para as capas
     return;
   }
   if (el.dataset.season !== undefined) {
@@ -367,11 +409,53 @@ function activate() {
   }
   const it = byId[el.dataset.id];
   if (!it) return;
-  if (it.kind === "gone") return toast("Este filme não está mais na pasta do PC.");
   if (it.kind === "episode") return play(it, false);
   stack.push({ screen: { ...screen }, key: el.dataset.k });
-  if (it.kind === "movie") renderMovie(it);
+  if (it.kind === "gone") renderGone(it);
+  else if (it.kind === "movie") renderMovie(it);
   else renderShow(it, 0);
+}
+
+// ---------- favoritos ----------
+function favButton(it) {
+  return { label: it.fav ? "♥ Nos favoritos" : "♡ Favoritar", act: () => toggleFav(it) };
+}
+function apiPost(path, body) {
+  const json = JSON.stringify(body);
+  if (window.onvlc && window.onvlc.post) return window.onvlc.post(path, json);  // o app manda para o PC
+  return fetch(path.slice(1), { method: "POST", headers: { "Content-Type": "application/json" }, body: json });
+}
+function toggleFav(it) {
+  const id = it.realId || it.id, on = !it.fav;
+  const pick = ["kind", "title", "year", "runtime", "genres", "vote", "overview", "poster", "backdrop", "logo", "frame", "quality"];
+  const item = {};
+  pick.forEach(k => { if (it[k] !== undefined) item[k] = it[k]; });
+  apiPost("/api/favorite", { id, on, item });
+  it.fav = on;
+  toast(on ? "Adicionado aos favoritos" : "Tirado dos favoritos", 1800);
+  render(current() && current().dataset.k);
+  setTimeout(load, 600);
+}
+
+// ---------- vídeo que saiu da pasta ----------
+function renderGone(it, keepKey) {
+  screen = { name: "gone", id: it.id };
+  setBg(it);
+  const btns = [favButton(it)];
+  const seen = it.watched ? `<span class="seen-t">✓ Assistido ${["hoje", "ontem"].includes(dateLabel(it.watched)) ? dateLabel(it.watched) : "em " + dateLabel(it.watched)}</span>` : "";
+  view.innerHTML = `<div class="detail"><div class="body">
+      <div class="logo">${titleBlock(it)}</div>
+      <div class="meta">${[it.year && `<span>${it.year}</span>`, it.ep && `<span>${esc(it.ep)}</span>`, it.runtime && !it.ep && `<span>${hm(it.runtime)}</span>`,
+        it.genres.length && `<span>${esc(it.genres.join(", "))}</span>`, it.vote && `<span><span class="star">★</span> ${it.vote.toLocaleString("pt-BR")}</span>`, seen]
+        .filter(Boolean).join("")}</div>
+      ${synopsis(it.overview)}
+      <div class="note gone"><span><b>Indisponível.</b> Este arquivo não está mais na pasta onVLC do PC. Coloque ele de volta lá para assistir.</span></div>
+      <div class="btns">${btns.map((b, i) => `<div class="btn" data-k="b:${i}">${esc(b.label)}</div>`).join("")}</div>
+    </div></div>`;
+  view.actions = btns;
+  onFocus = () => {};
+  zi = 0;
+  setZones([[...view.querySelectorAll(".btn")]], keepKey);
 }
 
 // ---------- kit de abertura ----------

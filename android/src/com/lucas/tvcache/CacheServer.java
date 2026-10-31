@@ -205,8 +205,11 @@ final class CacheServer {
     }
 
     private static void send(OutputStream out, String status, String type, byte[] body, String extra) throws IOException {
+        // imagens da biblioteca: o nome muda quando a imagem muda, então o navegador guarda para sempre
+        // (com "no-cache" ele buscava tudo de novo a cada troca de aba, e as capas piscavam)
+        String cache = type.startsWith("image/") ? "max-age=31536000, immutable" : "no-cache";
         String h = "HTTP/1.1 " + status + "\r\nContent-Type: " + type + "\r\nContent-Length: " + body.length
-                + "\r\nCache-Control: no-cache\r\n" + extra + "Connection: close\r\n\r\n";
+                + "\r\nCache-Control: " + cache + "\r\n" + extra + "Connection: close\r\n\r\n";
         out.write(h.getBytes("ISO-8859-1"));
         out.write(body);
     }

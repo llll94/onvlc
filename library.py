@@ -1,4 +1,4 @@
-"""Biblioteca da TV: os filmes e séries da pasta "Vídeos\\onVLC TV" do PC, mostrados na Mi Box.
+"""Biblioteca da TV: os filmes e séries da pasta "Vídeos\\onVLC" do PC, mostrados na Mi Box.
 
 Roda como um processo à parte (onVLC.exe --biblioteca), sem janela, com um ícone perto do relógio.
 O onVLC abre esse processo quando inicia; fechar a janela do player não fecha a biblioteca.
@@ -44,11 +44,12 @@ except ImportError:
     keyring = None
 
 HERE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-LIB_DIR = Path(os.environ.get("ONVLC_LIBRARY") or Path.home() / "Videos" / "onVLC TV")
+LIB_DIR = Path(os.environ.get("ONVLC_LIBRARY") or Path.home() / "Videos" / "onVLC")
 DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "onVLC" / "library"
 IMG_DIR = DATA_DIR / "img"
 INDEX = DATA_DIR / "index.json"
 HISTORY = DATA_DIR / "assistidos.json"  # o que foi assistido até o fim, com a data (fica mesmo se o arquivo sair da pasta)
+FAVORITES = DATA_DIR / "favoritos.json"  # favoritos, com os dados do filme para continuar aparecendo se o arquivo sair
 UI_DIR = HERE / "tvui"
 PORT = 8780
 SCAN_EVERY = 20
@@ -539,7 +540,7 @@ class Library:
                 for e in se["episodes"]:
                     e["watched"] = last.get(e["id"], "")
         return {"pc": socket.gethostname(), "folder": str(LIB_DIR), "busy": self.busy,
-                "history": hist[:40],
+                "history": hist[:40], "favorites": self.favorites(),
                 "tmdb": bool(self.tmdb.token),
                 "movies": sorted(movies, key=lambda m: -m["added"]),
                 "shows": sorted(out_shows.values(), key=lambda o: -o["added"]),
@@ -588,20 +589,32 @@ class Library:
         hist = self.history()
         if any(h["id"] == r["id"] and h["date"] == day for h in hist):
             return True
-        m = r.get("meta") or {}
-        entry = {"id": r["id"], "date": day, "at": when, "kind": r["kind"], "file": r["file"],
-                 "title": m.get("title") or (show.get("title") if r["kind"] == "episode" else None) or r["title"],
-                 "year": m.get("year") or show.get("year") or r.get("year"),
-                 "poster": m.get("poster") or show.get("poster", ""), "backdrop": m.get("backdrop") or show.get("backdrop", ""),
-                 "frame": r.get("frame", "")}
-        if r["kind"] == "episode":
-            ep = (show.get("seasons", {}).get(str(r["season"])) or {}).get(str(r["episode"]), {})
-            entry.update(season=r["season"], episode=r["episode"], epTitle=ep.get("name") or f"Episódio {r['episode']}")
+        entry = {"id": r["id"], "date": day, "at": when, "kind": r["kind"], "file": r["file"], **snapshot(r, show)}
         hist.append(entry)
         tmp = HISTORY.with_suffix(".tmp")
         tmp.write_text(json.dumps(hist, ensure_ascii=False, indent=1), encoding="utf-8")
         os.replace(tmp, HISTORY)
         log.info("assistido: %s em %s", entry["title"], day)
+        return True
+
+    def favorites(self):
+        try:
+            return json.loads(FAVORITES.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+
+    def set_favorite(self, fid, on, item=None):
+        """Liga ou desliga um favorito. `item`: os dados que a TV mostra (para o caso de o arquivo sair da pasta)."""
+        favs = [f for f in self.favorites() if f["id"] != fid]
+        if on:
+            keep = {k: v for k, v in (item or {}).items()
+                    if k in ("kind", "title", "year", "runtime", "genres", "vote", "overview", "poster", "backdrop", "logo",
+                             "frame", "quality")}
+            favs.insert(0, {"id": fid, "at": time.time(), **keep})
+        tmp = FAVORITES.with_suffix(".tmp")
+        tmp.write_text(json.dumps(favs, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, FAVORITES)
+        log.info("favorito %s: %s", "ligado" if on else "desligado", (item or {}).get("title") or fid)
         return True
 
     def path_of(self, fid):
@@ -624,6 +637,23 @@ class Library:
             s.setValue("posAt/" + k, time.time())
         s.sync()
         return True
+
+
+def snapshot(r, show=None):
+    """Os dados que a TV mostra de um vídeo, guardados junto do registro (sobrevivem ao arquivo sair da pasta)."""
+    m = r.get("meta") or {}
+    show = show or {}
+    ep = r.get("kind") == "episode"
+    out = {"title": m.get("title") or (show.get("title") if ep else None) or r["title"],
+           "year": m.get("year") or show.get("year") or r.get("year"),
+           "runtime": m.get("runtime") or round(r.get("dur", 0) / 60), "genres": m.get("genres") or show.get("genres", []),
+           "vote": m.get("vote") or show.get("vote", 0), "overview": m.get("overview") or show.get("overview", ""),
+           "poster": m.get("poster") or show.get("poster", ""), "backdrop": m.get("backdrop") or show.get("backdrop", ""),
+           "logo": m.get("logo") or show.get("logo", ""), "frame": r.get("frame", ""), "quality": r.get("quality", "")}
+    if ep:
+        e = (show.get("seasons", {}).get(str(r["season"])) or {}).get(str(r["episode"]), {})
+        out.update(season=r["season"], episode=r["episode"], epTitle=e.get("name") or f"Episódio {r['episode']}")
+    return out
 
 
 def is_end(pos, dur):
@@ -729,6 +759,9 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             return self._send(400, {"ok": False})
+        if path == "/api/favorite":
+            ok = self.lib.set_favorite(str(body.get("id", "")), bool(body.get("on")), body.get("item"))
+            return self._send(200, {"ok": ok})
         if path == "/api/watched":  # o onVLC do PC chegou ao fim de um vídeo da biblioteca
             ok = self.lib.mark_watched(fid=body.get("id"), path=body.get("path"))
             return self._send(200 if ok else 404, {"ok": ok})

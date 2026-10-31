@@ -154,6 +154,30 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
             });
         }
 
+        /** Manda um pedido para a biblioteca do PC (favoritos). */
+        @JavascriptInterface
+        public void post(final String path, final String json) {
+            final String b = PcFinder.base();
+            if (b == null || !path.startsWith("/api/")) return;
+            new Thread(() -> {
+                try {
+                    java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(b + path).openConnection();
+                    c.setConnectTimeout(3000);
+                    c.setReadTimeout(5000);
+                    c.setRequestMethod("POST");
+                    c.setDoOutput(true);
+                    c.setRequestProperty("Content-Type", "application/json");
+                    try (java.io.OutputStream out = c.getOutputStream()) {
+                        out.write(json.getBytes("UTF-8"));
+                    }
+                    c.getResponseCode();
+                    c.disconnect();
+                } catch (Exception e) {
+                    // PC fora do ar
+                }
+            }, "post").start();
+        }
+
         /** Kits de abertura: lista de filmes em ordem de prioridade ([{id,size,file,bps,pos}]). */
         @JavascriptInterface
         public void warm(final String json) {
