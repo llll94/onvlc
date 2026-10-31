@@ -202,7 +202,19 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
             });
         }
 
-        /** Manda um pedido para a biblioteca do PC (favoritos). */
+        /** O botão "Ligar o PC" aparece só quando o app já sabe o MAC do PC. */
+        @JavascriptInterface
+        public boolean canWakePc() {
+            return PcFinder.canWake(LibraryActivity.this);
+        }
+
+        /** Acorda o PC pela rede (Wake-on-LAN). */
+        @JavascriptInterface
+        public void wakePc() {
+            PcFinder.wake(LibraryActivity.this);
+        }
+
+        /** Manda um pedido para a biblioteca do PC. */
         @JavascriptInterface
         public void post(final String path, final String json) {
             final String b = PcFinder.base();

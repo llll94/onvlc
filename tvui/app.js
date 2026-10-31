@@ -236,9 +236,14 @@ function renderHome(keepKey) {
   }
   const home = homeEl();
   view.replaceChildren(home);
-  const zs = [...home.querySelectorAll(".row .cards")].map(c => [...c.children]);
+  const zs = [wakeZone(), ...[...home.querySelectorAll(".row .cards")].map(c => [...c.children])];
   onFocus = el => {
     if (!el) return;
+    if (el.id === "wake") {  // no botão "Ligar o PC": o destaque mostra o primeiro da lista
+      const c = home.querySelector(".card");
+      if (c) hero(byId[c.dataset.id]);
+      return;
+    }
     home.querySelector(".rows-in").style.transform = `translateY(${-el.closest(".row").offsetTop}px)`;
     scrollCards(el);
     hero(byId[el.dataset.id]);
@@ -282,7 +287,7 @@ function renderMovie(it, keepKey) {
   view.actions = btns;
   onFocus = () => {};
   zi = 0;
-  setZones([[...view.querySelectorAll(".btn")]], keepKey);
+  setZones([wakeZone(), [...view.querySelectorAll(".btn")]], keepKey);
   plPrepare(it);
   warm(it);
 }
@@ -317,7 +322,7 @@ function renderShow(show, season, keepKey) {
       $("ep-text").innerHTML = synopsis(show.overview);
     }
   };
-  const zs = [[...view.querySelectorAll(".btns .btn")], [...view.querySelectorAll(".seasons .btn")], [...view.querySelectorAll(".eps .card")]];
+  const zs = [wakeZone(), [...view.querySelectorAll(".btns .btn")], [...view.querySelectorAll(".seasons .btn")], [...view.querySelectorAll(".eps .card")]];
   zi = 0;
   setZones(zs, keepKey);
   const primary = started || first;
@@ -334,9 +339,11 @@ function episodeCard(e) {
 
 function renderSearching() {
   setBg(null);
-  view.innerHTML = `<div class="empty"><div class="spinner"></div><h2>Procurando o PC</h2>
-    <p>Os filmes ficam no computador. Abra o <b>onVLC</b> no PC e a TV acha sozinha.</p></div>`;
+  view.innerHTML = `<div class="empty"><div class="spinner"></div><h2>${waking ? "Ligando o PC" : "Procurando o PC"}</h2>
+    <p>${canWake() ? "Os filmes ficam no computador. Se ele estiver dormindo ou desligado, use <b>Ligar o PC</b>, no alto da tela."
+                   : "Os filmes ficam no computador. Abra o <b>onVLC</b> no PC e a TV acha sozinha."}</p></div>`;
   zones = [];
+  setZones([wakeZone()]);
 }
 
 function render(keepKey) {
@@ -352,6 +359,7 @@ function render(keepKey) {
 function activate() {
   const el = current();
   if (!el) return;
+  if (el.dataset.k === "wake") return wakePc();
   if (el.dataset.season !== undefined) {
     renderShow(byId[screen.id], +el.dataset.season, el.dataset.k);
     return;
@@ -411,7 +419,7 @@ function warm(front) {
 
 function play(it, fromStart) {
   if (it.broken) return toast("O PC não consegue abrir este arquivo.");
-  if (OFFLINE) return toast("O PC está desligado. Abra o onVLC no PC e tente de novo.", 3500);
+  if (OFFLINE) return toast(canWake() ? "O PC está desligado. Use \"Ligar o PC\", no alto da tela." : "O PC está desligado. Abra o onVLC no PC e tente de novo.", 3500);
   const pos = fromStart ? 0 : (it.pos || 0);
   const title = it.kind === "episode" ? `${it.show.title} · ${epLabel(it)} · ${it.title}` : it.title;
   if (PC) return host("play", { id: it.id, pos });
@@ -517,6 +525,26 @@ tv.addEventListener("click", e => {
   if (same || el.classList.contains("btn")) activate();
 });
 
+// ---------- ligar o PC pela rede (Wake-on-LAN, pelo app) ----------
+let waking = 0;  // quando o botão foi apertado (a página procura o PC mais vezes por 2 min)
+const canWake = () => !!(window.onvlc && window.onvlc.canWakePc && window.onvlc.canWakePc());
+const wakeZone = () => $("wake").hidden ? [] : [$("wake")];
+function updateWake() {
+  const b = $("wake");
+  if (!OFFLINE) waking = 0;
+  b.hidden = !(OFFLINE && canWake());
+  b.textContent = waking ? "Ligando o PC…" : "Ligar o PC";
+}
+function wakePc() {
+  if (!canWake()) return;
+  window.onvlc.wakePc();
+  waking = Date.now();
+  updateWake();
+  toast("Ligando o PC… a lista aparece sozinha quando ele acordar", 6000);
+  clearTimeout(loadTimer);
+  loadTimer = setTimeout(load, 3000);
+}
+
 // ---------- carregar ----------
 let STATE_KEY = "";
 async function load() {
@@ -546,6 +574,8 @@ async function load() {
   const pc = $("pc");
   pc.textContent = OFFLINE ? "PC desligado" : "PC ligado";
   pc.classList.toggle("off", OFFLINE);
+  const wakeWas = $("wake").hidden;
+  updateWake();
   if (text && text !== RAW) {
     RAW = text;
     LIB = JSON.parse(text);
@@ -555,7 +585,7 @@ async function load() {
     if (!PL.open) render(key);
   } else if (!LIB) {
     renderSearching();
-  } else if (OFFLINE !== wasOffline && !PL.open) {
+  } else if ((OFFLINE !== wasOffline || wakeWas !== $("wake").hidden) && !PL.open) {
     const key = current() && current().dataset.k;
     render(key);  // mostra ou tira o aviso de PC desligado
   }
@@ -563,7 +593,8 @@ async function load() {
   busy.hidden = !(LIB && LIB.busy && !OFFLINE);
   if (!busy.hidden) busy.textContent = `Lendo ${plural(LIB.busy, "vídeo novo", "vídeos novos")}`;
   playPending();
-  loadTimer = setTimeout(load, OFFLINE || !LIB || LIB.busy || pendingPlay ? 5000 : 30000);
+  const wakingNow = waking && Date.now() - waking < 120000;
+  loadTimer = setTimeout(load, wakingNow ? 3000 : OFFLINE || !LIB || LIB.busy || pendingPlay ? 5000 : 30000);
 }
 
 function tick() {

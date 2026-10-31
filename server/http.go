@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,7 +22,7 @@ import (
 
 // Rotas (as mesmas do library.py, para a TV não perceber a troca):
 //
-//	GET  /api/hello                 quem é (a TV usa para achar o PC na rede)
+//	GET  /api/hello                 quem é (a TV usa para achar o PC na rede) e o MAC da placa (para a TV acordar o PC)
 //	GET  /api/library               a lista inteira (com ETag: sem mudança, responde 304)
 //	GET  /api/state                 só o que muda sozinho: versão do catálogo, posições, "continuar", "lendo"
 //	GET  /api/media?path=           (só do próprio PC) um arquivo qualquer: id, posição, retomada, legendas
@@ -73,7 +74,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch p {
 	case "/api/hello":
 		host, _ := os.Hostname()
-		s.json(w, r, map[string]any{"app": "onvlc-library", "name": host, "version": 2}, false)
+		s.json(w, r, map[string]any{"app": "onvlc-library", "name": host, "version": 2, "mac": macOf(r)}, false)
 		return
 	case "/api/library":
 		s.json(w, r, s.lib.listing(), true)
@@ -204,6 +205,24 @@ func (s *server) post(w http.ResponseWriter, r *http.Request, p string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	w.Write([]byte(`{"ok":` + strconv.FormatBool(ok) + `}`))
+}
+
+// macOf: o MAC da placa de rede por onde o pedido chegou (a da rede de casa, a mesma que a TV usa para acordar o PC).
+func macOf(r *http.Request) string {
+	la, ok := r.Context().Value(http.LocalAddrContextKey).(*net.TCPAddr)
+	if !ok {
+		return ""
+	}
+	ifaces, _ := net.Interfaces()
+	for _, ifc := range ifaces {
+		addrs, _ := ifc.Addrs()
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok && n.IP.Equal(la.IP) {
+				return ifc.HardwareAddr.String()
+			}
+		}
+	}
+	return ""
 }
 
 func local(r *http.Request) bool {

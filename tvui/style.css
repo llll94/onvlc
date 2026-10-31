@@ -25,6 +25,8 @@ img { display: block; }
 .pill { display: flex; align-items: center; gap: 10px; font-size: 22px; font-weight: 600; background: rgba(0,0,0,.55); padding: 8px 18px; border-radius: 999px; }
 #pc::before { content: ""; width: 12px; height: 12px; border-radius: 50%; background: #3ecf6e; }
 #pc.off::before { background: var(--bad); }
+.bar .btn.wake { font-size: 22px; font-weight: 600; padding: 8px 22px; border-radius: 999px; background: var(--o); color: #111; }
+.bar .btn.wake.focus { background: #fff; }
 .clock { font-size: 26px; font-variant-numeric: tabular-nums; color: #fff; text-shadow: 0 1px 8px rgba(0,0,0,.7); }
 
 /* destaque do item em foco */

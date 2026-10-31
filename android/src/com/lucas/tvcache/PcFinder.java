@@ -21,6 +21,9 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * Com o PC desligado a página continua pedindo a lista; o último endereço é testado a cada pedido, mas a
  * varredura da rede inteira só se repete com intervalo crescente (30 s, 1 min, 2 min... até 5 min).
+ *
+ * A biblioteca conta o MAC da placa de rede do PC no /api/hello; ele fica guardado para o botão "Ligar o PC"
+ * mandar o pacote de acordar (Wake-on-LAN) quando o PC estiver dormindo ou desligado.
  */
 final class PcFinder {
     static final int PORT = 8780;
@@ -57,7 +60,7 @@ final class PcFinder {
     private static String find(Context ctx) {
         SharedPreferences prefs = ctx.getSharedPreferences("pc", Context.MODE_PRIVATE);
         String last = prefs.getString("ip", null);
-        if (last != null && hello(last, 1500)) {
+        if (last != null && hello(ctx, last, 1500)) {
             scanGap = 30_000;
             return url(last);
         }
@@ -72,7 +75,7 @@ final class PcFinder {
         for (int i = 1; i < 255; i++) {
             final String ip = prefix + i;
             pool.execute(() -> {
-                if (hit.get() == null && hello(ip, 800)) hit.compareAndSet(null, ip);
+                if (hit.get() == null && hello(ctx, ip, 800)) hit.compareAndSet(null, ip);
             });
         }
         pool.shutdown();
@@ -92,7 +95,7 @@ final class PcFinder {
         return "http://" + ip + ":" + PORT;
     }
 
-    static boolean hello(String ip, int timeout) {
+    static boolean hello(Context ctx, String ip, int timeout) {
         HttpURLConnection c = null;
         try {
             c = (HttpURLConnection) new URL(url(ip) + "/api/hello").openConnection();
@@ -102,12 +105,71 @@ final class PcFinder {
             byte[] buf = new byte[512];
             InputStream in = c.getInputStream();
             int n = in.read(buf);
-            return n > 0 && new String(buf, 0, n, "UTF-8").contains("onvlc-library");
+            String body = n > 0 ? new String(buf, 0, n, "UTF-8") : "";
+            if (!body.contains("onvlc-library")) return false;
+            try {  // o MAC da placa do PC, para acordar ele depois
+                String mac = new org.json.JSONObject(body).optString("mac", "");
+                if (mac.matches("([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}")) {
+                    ctx.getSharedPreferences("pc", Context.MODE_PRIVATE).edit().putString("mac", mac).apply();
+                }
+            } catch (Exception e) {
+                // biblioteca antiga, sem MAC
+            }
+            return true;
         } catch (Exception e) {
             return false;
         } finally {
             if (c != null) c.disconnect();
         }
+    }
+
+    /** Já sabe o MAC do PC (achou a biblioteca pelo menos uma vez)? */
+    static boolean canWake(Context ctx) {
+        return ctx.getSharedPreferences("pc", Context.MODE_PRIVATE).getString("mac", null) != null;
+    }
+
+    /**
+     * Manda o pacote de acordar (Wake-on-LAN: 6 bytes FF e o MAC 16 vezes) para a rede inteira e para o último IP,
+     * algumas vezes (no Wi-Fi um pacote às vezes se perde). Depois volta a procurar o PC sem esperar a fila.
+     */
+    static void wake(final Context ctx) {
+        final SharedPreferences prefs = ctx.getSharedPreferences("pc", Context.MODE_PRIVATE);
+        final String mac = prefs.getString("mac", null), last = prefs.getString("ip", null);
+        if (mac == null) return;
+        Thread t = new Thread(() -> {
+            try {
+                String[] hex = mac.split("[:-]");
+                byte[] pkt = new byte[6 + 16 * 6];
+                for (int i = 0; i < 6; i++) pkt[i] = (byte) 0xff;
+                for (int r = 0; r < 16; r++) {
+                    for (int i = 0; i < 6; i++) pkt[6 + r * 6 + i] = (byte) Integer.parseInt(hex[i], 16);
+                }
+                String prefix = prefix();
+                java.util.ArrayList<String> dst = new java.util.ArrayList<>();
+                dst.add("255.255.255.255");
+                if (prefix != null) dst.add(prefix + "255");
+                if (last != null) dst.add(last);
+                try (java.net.DatagramSocket s = new java.net.DatagramSocket()) {
+                    s.setBroadcast(true);
+                    for (int round = 0; round < 3; round++) {
+                        for (String d : dst) {
+                            for (int port : new int[]{9, 7}) {
+                                s.send(new java.net.DatagramPacket(pkt, pkt.length, InetAddress.getByName(d), port));
+                            }
+                        }
+                        Thread.sleep(300);
+                    }
+                }
+            } catch (Exception e) {
+                // sem rede: o botão pode ser apertado de novo
+            }
+            synchronized (PcFinder.class) {
+                lastScan = 0;
+                scanGap = 30_000;
+            }
+        }, "pc-wake");
+        t.setDaemon(true);
+        t.start();
     }
 
     /** "192.168.1." a partir do endereço da própria Mi Box na rede. */
