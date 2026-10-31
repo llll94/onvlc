@@ -97,7 +97,7 @@ class Player(QObject):
     stateChanged = Signal()
     toast = Signal(str)
     _webResult = Signal(object)  # resposta do OpenSubtitles, vinda de outra thread
-    _tvState = Signal(object)  # estado da Pasta da TV, vindo de outra thread
+    _tvState = Signal(object)  # estado da pasta onVLC, vindo de outra thread
     _watchState = Signal(object)  # estado do Assistir na TV, vindo de outra thread
 
     def __init__(self, app):
@@ -129,12 +129,9 @@ class Player(QObject):
         self.st = {"tv": {}}
         self._reset_media_state()
 
-        self.tv = tvfolder.TvFolder(self._tvState.emit)
-        self.tv.optimize = self.settings.value("tv/optimize", "true") == "true"
-        self.tv.autoclean = self.settings.value("tv/autoclean", "true") == "true"
-        self.tv.limit_gb = int(self.settings.value("tv/limit", 10))
+        self.tv = tvfolder.LibraryFolder(self._tvState.emit)
         self._tvState.connect(self._on_tv)
-        self.tv.setup_async()
+        self.tv.refresh_async()
 
         self.stream = tvstream.StreamServer()
         self.box = tvstream.MiBox()
@@ -512,11 +509,12 @@ class Player(QObject):
         self.toast.emit("Não consegui salvar a legenda")
         return None
 
-    # ---------- Pasta da TV ----------
+    # ---------- pasta onVLC (o que a TV mostra) ----------
     def _on_tv(self, data):
         msg = data.pop("toast", None)
-        self.st["tv"] = data
-        self.stateChanged.emit()
+        if data:
+            self.st["tv"] = data
+            self.stateChanged.emit()
         if msg:
             self.toast.emit(msg)
 
@@ -526,12 +524,8 @@ class Player(QObject):
 
     @Slot()
     def tvSendCurrent(self):
-        if not self.path:
-            return
-        if Path(self.path).parent == tvfolder.TV_DIR:
-            self.toast.emit("Esse vídeo já está na Pasta da TV")
-        elif self.tv.add(self.path):
-            self.toast.emit("Mandando para a Pasta da TV")
+        if self.path:
+            self.toast.emit(self.tv.add(self.path))
 
     @Slot()
     def tvAddFiles(self):
@@ -539,45 +533,32 @@ class Player(QObject):
         exts = " ".join("*" + e for e in sorted(VIDEO_EXTS))
         files, _ = self._dialog(lambda w: QFileDialog.getOpenFileNames(
             w, "Mandar para a TV", start, f"Vídeos ({exts})"))
+        msg = ""
         for f in files:
-            self.tv.add(f)
+            msg = self.tv.add(f)
+        if len(files) > 1:
+            msg = f"{len(files)} vídeos indo para a pasta onVLC"
+        if msg:
+            self.toast.emit(msg)
 
     @Slot(str)
-    def tvDelete(self, name):
-        if self.tv.delete(name):
+    def tvDelete(self, path):
+        name = Path(path).stem
+        if self.tv.delete(path):
             self.toast.emit(name + " saiu da TV (está na Lixeira do PC)")
         else:
             self.toast.emit("Não consegui apagar " + name)
 
     @Slot(str)
-    def tvPlay(self, name):
-        p = tvfolder.TV_DIR / name
-        if p.is_file():
-            self.open_path(str(p))
-
-    @Slot()
-    def tvToggleOptimize(self):
-        self.tv.optimize = not self.tv.optimize
-        self.settings.setValue("tv/optimize", "true" if self.tv.optimize else "false")
-        self.tv.refresh_async()
-
-    @Slot()
-    def tvToggleAutoclean(self):
-        self.tv.autoclean = not self.tv.autoclean
-        self.settings.setValue("tv/autoclean", "true" if self.tv.autoclean else "false")
-        self.tv.refresh_async()
-
-    @Slot()
-    def tvCycleLimit(self):
-        steps = [5, 10, 15]  # a Mi Box tem ~22 GB livres
-        self.tv.limit_gb = next((g for g in steps if g > self.tv.limit_gb), steps[0])
-        self.settings.setValue("tv/limit", self.tv.limit_gb)
-        self.tv.refresh_async()
+    def tvPlay(self, path):
+        if os.path.isfile(path):
+            self.open_path(path)
 
     @Slot()
     def tvOpenFolder(self):
-        tvfolder.TV_DIR.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(tvfolder.TV_DIR))
+        folder = tvfolder.lib_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(folder))
 
     # ---------- Assistir na TV ----------
     def _on_watch(self, data):

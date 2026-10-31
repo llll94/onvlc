@@ -269,7 +269,7 @@ function plTrackName(raw) {
   const bits = [lang];
   if (/american/.test(d)) bits.push("americano");
   if (/british/.test(d)) bits.push("britânico");
-  if (/brazil/.test(d)) bits.push("do Brasil");
+  if (/brazil|brasil/.test(d)) bits.push("do Brasil");
   if (/europe|portugal/.test(d)) bits.push("de Portugal");
   if (/latin/.test(d)) bits.push("latino");
   let name = bits.join(" ");
@@ -291,7 +291,9 @@ function plAutoSub() {
   PL.subPicked = true;
   const audio = ((PL.st.audio || []).find(a => a.id === PL.st.audioId) || {}).name || "";
   if (/portugu|\[por\]|\bpt\b/i.test(audio)) return;
-  const pt = plSpuList().find(s => s.id >= 0 && /^Português/.test(s.name));
+  // a do Brasil primeiro (o Project Hail Mary tem as duas), nunca a "só falas estrangeiras"
+  const pts = plSpuList().filter(s => s.id >= 0 && /^Português/.test(s.name) && !/estrangeiras/.test(s.name));
+  const pt = pts.find(s => /Brasil/.test(s.name)) || pts.find(s => !/Portugal/.test(s.name)) || pts[0];
   if (pt && pt.id !== PL.st.spuId) { window.onvlc.spu(pt.id); PL.st.spuId = pt.id; }
 }
 function plRenderPanel() {

@@ -67,7 +67,7 @@ Item {
     function subLabel(t) { return t.id === -1 ? "Desligadas" : t.name }
     function catInfo(id) {
         for (var i = 0; i < cats.length; i++) if (cats[i].id === id) return cats[i]
-        return { nome: "Pasta da TV", desc: "Vídeos que o Syncthing copia para a Mi Box." }
+        return { nome: "Pasta onVLC", desc: "Os vídeos que a TV mostra e toca direto do PC." }
     }
 
     function moved(y) {
@@ -200,16 +200,11 @@ Item {
                     { t: "Atrasar / adiantar legenda", k: "H G" }, { t: "Abrir e fechar o menu", k: "Tab" },
                     { t: "Abrir arquivo", k: "Ctrl+O" }, { head: " " }, { t: "Versão", v: "Deploy 3" }]
         case "tv":
-            var tv = s.tv || {}
             return [{ head: "Mandar para a TV" },
                     { t: "Mandar o vídeo atual", act: s.hasMedia ? "tvSend" : "" },
                     { t: "Escolher vídeos…", act: "tvAdd" },
-                    { head: "Opções" },
-                    { t: "Otimizar vídeos pesados", sw: !!tv.optimize, act: "tvOpt" },
-                    { t: "Liberar espaço sozinho", sw: !!tv.autoclean, act: "tvClean" },
-                    { t: "Espaço máximo na Mi Box", v: (tv.limit || 10) + " GB", act: "tvLimit" },
                     { t: "Abrir pasta no Windows", act: "tvOpen" },
-                    { note: "Otimizar converte para HEVC o que for pesado, ao mandar por aqui; jogado direto na pasta pelo Explorer, vai do jeito que está. Liberar espaço apaga os mais antigos quando passa do máximo. O que sai da TV vai para a Lixeira do PC. Dois cliques num vídeo da lista tocam ele aqui." }]
+                    { note: "Mandar põe o vídeo na pasta onVLC sem ocupar espaço a mais e sem tirar o original de onde está (de outro disco, ele é copiado). Legendas com o mesmo nome vão junto. Também dá para jogar arquivos direto na pasta pelo Explorer. Apagar daqui manda para a Lixeira do PC. Dois cliques num vídeo da lista tocam ele aqui." }]
         }
         return []
     }
@@ -257,9 +252,6 @@ Item {
         case "defaultApp": player.setDefaultApp(); break
         case "tvSend": player.tvSendCurrent(); break
         case "tvAdd": player.tvAddFiles(); break
-        case "tvOpt": player.tvToggleOptimize(); break
-        case "tvClean": player.tvToggleAutoclean(); break
-        case "tvLimit": player.tvCycleLimit(); break
         case "tvOpen": player.tvOpenFolder(); break
         }
     }
@@ -1290,7 +1282,7 @@ Item {
             Repeater {
                 // [ícone, título, explicação, ação]; sem ação = ainda não existe
                 model: [["tv", "Assistir na TV", "Abre no VLC da Mi Box na hora, sem copiar.", "watch"],
-                        ["folder", "Pasta da TV", "Otimiza e deixa na Mi Box para ver depois.", "folder"]]
+                        ["folder", "Pasta onVLC", "Deixa na biblioteca da TV para ver quando quiser.", "folder"]]
                 delegate: Rectangle {
                     id: dst
                     required property var modelData
@@ -1320,7 +1312,7 @@ Item {
                     }
                 }
             }
-            Link { label: "Abrir Pasta da TV"; onClicked: { root.popName = ""; root.cat = "tv"; root.menuOpen = true; root.showTop = true } }
+            Link { label: "Abrir pasta onVLC"; onClicked: { root.popName = ""; root.cat = "tv"; root.menuOpen = true; root.showTop = true } }
         }
     }
 
@@ -1366,7 +1358,7 @@ Item {
                     delegate: Column {
                         required property int index
                         readonly property bool isTv: index === root.cats.length
-                        readonly property var c: isTv ? { id: "tv", nome: "Pasta da TV", ic: "tv" } : root.cats[index]
+                        readonly property var c: isTv ? { id: "tv", nome: "Pasta onVLC", ic: "tv" } : root.cats[index]
                         width: catCol.width - 16
                         Rectangle { visible: parent.isTv; width: parent.width - 12; x: 6; height: 1; color: root.line }
                         Item { visible: parent.isTv; width: 1; height: 8 }
@@ -1418,7 +1410,7 @@ Item {
                     color: root.mutedText; font.family: root.uiFont; font.pixelSize: 13
                 }
 
-                // Pasta da TV: status do Syncthing, espaço e vídeos
+                // pasta onVLC: estado da biblioteca da TV e os vídeos (com o nome que a TV mostra)
                 Column {
                     id: tvBox
                     readonly property var tv: s.tv || ({})
@@ -1441,31 +1433,19 @@ Item {
                                 Rectangle {
                                     anchors.verticalCenter: parent.verticalCenter
                                     width: 8; height: 8; radius: 4
-                                    color: tvBox.tv.error ? "#ff8a80" : (tvBox.tv.connected ? root.green : (tvBox.tv.device ? root.orange : root.mutedText))
+                                    color: tvBox.tv.running ? root.green : root.mutedText
                                 }
                                 Text {
-                                    text: tvBox.tv.error ? tvBox.tv.error
-                                        : !tvBox.tv.device ? "A Mi Box ainda não foi ligada ao Syncthing"
-                                        : tvBox.tv.connected ? "Syncthing conectado à " + tvBox.tv.device
-                                        : tvBox.tv.device + " desligada: copia quando ela ligar"
+                                    text: tvBox.tv.running ? "Biblioteca da TV ligada" + (tvBox.tv.summary ? " · " + tvBox.tv.summary : "")
+                                        : "Biblioteca da TV desligada: ela liga junto com o onVLC"
                                     color: "white"; font.family: root.uiFont; font.pixelSize: 14; font.bold: true
                                 }
                             }
                             Text { text: tvBox.tv.path || ""; color: root.mutedText; font.family: root.monoFont; font.pixelSize: 12 }
-                            Rectangle {
-                                width: parent.width; height: 6; radius: 3
-                                color: Qt.rgba(1, 1, 1, 0.1)
-                                Rectangle {
-                                    height: parent.height; radius: 3; color: root.orange
-                                    width: parent.width * Math.min(1, (tvBox.tv.used || 0) / (tvBox.tv.limit || 10))
-                                }
-                            }
                             Text {
                                 width: parent.width
                                 wrapMode: Text.Wrap
-                                text: (tvBox.tv.usedTxt || "0 MB") + " usados de " + (tvBox.tv.limit || 10) + " GB"
-                                      + (tvBox.tv.autoclean ? ". Quando encher, os mais antigos saem primeiro." : ".")
-                                      + (tvBox.tv.ffmpeg === false ? " ffmpeg não encontrado: os vídeos vão sem otimizar." : "")
+                                text: (tvBox.tv.totalTxt || "0 MB") + " na pasta. A TV toca direto daqui; o PC precisa estar ligado."
                                 color: root.mutedText; font.family: root.uiFont; font.pixelSize: 13
                             }
                         }
@@ -1474,7 +1454,7 @@ Item {
                     Text {
                         visible: !tvBox.files.length
                         leftPadding: 8; topPadding: 4; bottomPadding: 8
-                        text: "Nenhum vídeo na pasta da TV."
+                        text: "Nenhum vídeo na pasta onVLC."
                         color: root.mutedText; font.family: root.uiFont; font.pixelSize: 13
                     }
                     Repeater {
@@ -1483,8 +1463,8 @@ Item {
                             id: tf
                             required property int index
                             readonly property var f: tvBox.files[index] || ({})
-                            // opt/prep/queue = ainda sendo preparado, fora da pasta
-                            readonly property bool job: ["opt", "prep", "queue"].indexOf(f.state) >= 0
+                            // copy = ainda sendo copiado de outro disco
+                            readonly property bool job: f.state === "copy"
                             width: tvBox.width; height: 40; radius: 8
                             color: fma.containsMouse ? root.panel2 : "transparent"
                             MouseArea {
@@ -1492,14 +1472,14 @@ Item {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: tf.job ? Qt.ArrowCursor : Qt.PointingHandCursor
-                                onDoubleClicked: if (!tf.job) { root.menuOpen = false; player.tvPlay(tf.f.name) }
+                                onDoubleClicked: if (!tf.job) { root.menuOpen = false; player.tvPlay(tf.f.path) }
                             }
                             Icon { x: 10; anchors.verticalCenter: parent.verticalCenter; name: "file"; size: 18; color: root.orange }
                             Text {
                                 x: 38; width: parent.width - 38 - stateRow.width - 12
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: tf.f.name || ""
-                                elide: Text.ElideMiddle
+                                text: tf.f.title || tf.f.name || ""
+                                elide: Text.ElideRight
                                 color: Qt.rgba(1, 1, 1, 0.85); font.family: root.uiFont; font.pixelSize: 14
                             }
                             Row {
@@ -1507,21 +1487,20 @@ Item {
                                 anchors.right: parent.right; anchors.rightMargin: 4
                                 anchors.verticalCenter: parent.verticalCenter
                                 spacing: 10
-                                Text { anchors.verticalCenter: parent.verticalCenter; text: tf.f.size || ""; color: root.mutedText; font.family: root.monoFont; font.pixelSize: 12 }
+                                Text { anchors.verticalCenter: parent.verticalCenter; text: [tf.f.quality, tf.f.size].filter(function (x) { return !!x }).join(" · "); color: root.mutedText; font.family: root.monoFont; font.pixelSize: 12 }
                                 Text {
                                     anchors.verticalCenter: parent.verticalCenter
                                     readonly property string st: tf.f.state || ""
-                                    text: st === "ok" ? "Na TV ✓" : st === "copy" ? "Copiando para a TV" : st === "opt" ? "Otimizando " + tf.f.p + "%"
-                                        : st === "prep" ? "Preparando " + tf.f.p + "%" : st === "pc" ? "Só no PC"
-                                        : st === "wait" ? "Espera a TV ligar" : "Na fila"
-                                    color: st === "ok" ? root.green : (st === "pc" ? root.mutedText : root.orange)
+                                    text: st === "ok" ? "Na TV ✓" : st === "copy" ? "Copiando " + tf.f.p + "%" : st === "read" ? "Lendo…"
+                                        : st === "bad" ? "Com problema" : "Biblioteca desligada"
+                                    color: st === "ok" ? root.green : st === "bad" ? "#ff8a80" : (st === "pc" ? root.mutedText : root.orange)
                                     font.family: root.uiFont; font.pixelSize: 12; font.bold: true
                                 }
                                 Btn {
                                     visible: !tf.job
                                     width: 30; height: 30
                                     icon: "trash"; iconSize: 16; grow: false; hoverBg: true
-                                    onClicked: player.tvDelete(tf.f.name)
+                                    onClicked: player.tvDelete(tf.f.path)
                                 }
                             }
                         }
