@@ -55,7 +55,7 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
 | `thumbs.py` | Miniaturas no PC só quando a biblioteca está fora (normalmente é o `server\thumbs.go`, até 3 vídeos ao mesmo tempo) |
 | `opensubs.py` | Legendas do OpenSubtitles (falta o Lucas criar conta/chave) |
 | `tvui\index.html`, `app.js`, `style.css` | Página da biblioteca (1920×1080 escalada; sem filtros/máscaras/sombras animadas no CSS; capas `loading=lazy`; a cada 30 s pede `api/state` e só baixa a lista inteira quando muda; destaque não recria o logo). Tela inicial sem abas, só 3 linhas: Continuar assistindo / Mídias (tudo, mais novo primeiro) / Vocês já assistiram (montada uma vez e reaproveitada); sem favoritos. Página do filme/série, indisponível, procurando PC. Modo PC com `?pc=1` |
-| `tvui\player.js` | Interface do player da TV (barra única com trecho guardado, miniatura ao procurar, painel áudio/legendas com rolagem, pausado, próximo episódio, nova tentativa se travar) |
+| `tvui\player.js` | Interface do player da TV (barra única com trecho guardado, miniatura ao procurar, painel áudio/legendas com rolagem, tela de espera do pausado — qualquer botão tira, volta após 10 s parado (`plPausedLong`), próximo episódio, nova tentativa se travar) |
 | `android\src\…\LibraryActivity.java` | Atividade da tela inicial: WebView transparente + `VideoPlayer` atrás; ponte JS `window.onvlc` (play, prepare, unprepare, toggle, seek, audio, spu, stop, warm, post) |
 | `VideoPlayer.java` | libVLC (iniciado em segundo plano quando o app abre): SurfaceView vídeo + legenda, `:network-caching=400`, `:prefetch-read-size=262144`, `:prefetch-buffer-size=4096`, `:start-paused` para preparar, legendas externas como slave; busca rápida (quadro-chave); avisa a página só quando o "carregando" começa/termina; lista de faixas só refeita nos eventos ES* |
 | `CacheServer.java` | Servidor local 127.0.0.1:8090: `/stream` (blocos de 8 MB, 5 min à frente, 1 min atrás, 2 GB de vários filmes; bloco ainda chegando já é entregue conforme chega, `partial`), **kit de abertura** (até 4 GB, fixado), `/ui/*` (repassa a página e a API para o PC e guarda cópia para quando o PC está desligado; imagens com cache longo), `/status` |
@@ -102,7 +102,8 @@ cada vídeo tem `id, path, file, size, dur, pos, bps, quality, audio, subs, extS
 ## Como testar
 
 - **Quem roda de verdade é a cópia de `dist\onVLC`** (biblioteca + `_internal\tvui`). Mudou `server\` ou `tvui\`? Gerar o
-  pacote de novo (`python tools\build.py`, fechando o onVLC antes) e recarregar a TV — senão a TV guarda a página antiga
+  pacote de novo (`python tools\build.py`: ele mesmo pausa a tarefa, fecha biblioteca e onVLC e religa tudo no fim —
+  sem pausar a tarefa, ela reabre a biblioteca no meio e o build quebra a pasta `dist`) e recarregar a TV — senão a TV guarda a página antiga
   (aconteceu em 2026-10-31: o botão "Ligar o PC" sumiu porque a biblioteca de `dist` estava desatualizada).
 - PC sem empacotar: `python main.py [arquivo]`. Biblioteca: `cd server && go build -ldflags "-H windowsgui -s -w" -o onvlc-biblioteca.exe .`
   (Go em `C:\Program Files\Go\bin`), depois `python -c "import library; library.start_detached()"`; para reiniciar,
