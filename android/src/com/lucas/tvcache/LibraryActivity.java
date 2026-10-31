@@ -22,12 +22,16 @@ import org.json.JSONObject;
  *
  * O filme toca aqui mesmo (VideoPlayer, motor do VLC) numa superfície atrás da página; a página
  * fica transparente e desenha a barra e os menus por cima. A posição vai para o PC a cada 10 s e ao parar.
+ *
+ * "Assistir na TV" do PC abre esta tela pelo adb com extras: play (id do vídeo) + pos (ms), ou stop.
  */
 public class LibraryActivity extends Activity implements VideoPlayer.Listener {
     private WebView web;
     private VideoPlayer player;
     private String base;  // o PC do filme que está tocando
     private double lastSent = -1;
+    private boolean pageReady;
+    private JSONObject pendingPlay;  // pedido do PC esperando a página carregar
 
     @Override
     protected void onCreate(Bundle state) {
@@ -47,7 +51,13 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
-        web.setWebViewClient(new WebViewClient());
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView v, String url) {
+                pageReady = true;
+                deliverPlay();
+            }
+        });
         web.addJavascriptInterface(new Bridge(), "onvlc");
         root.addView(web, new FrameLayout.LayoutParams(-1, -1));
         player = new VideoPlayer(this, root, this);
@@ -55,6 +65,45 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
         web.requestFocus();
         // espera um instante pela busca do PC para a primeira tela já vir com a lista nova
         web.postDelayed(() -> web.loadUrl("http://127.0.0.1:" + CacheServer.PORT + "/ui/index.html"), 1200);
+        handleIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIntent(intent);
+    }
+
+    /** Pedidos do PC: tocar um vídeo da biblioteca num ponto, ou parar o que está tocando. */
+    private void handleIntent(Intent i) {
+        if (i == null) return;
+        if (i.getBooleanExtra("stop", false)) {
+            i.removeExtra("stop");
+            if (player.active()) {
+                player.stop(true);
+                web.evaluateJavascript("window.onPlayerClosed && onPlayerClosed()", null);
+            }
+            return;
+        }
+        String id = i.getStringExtra("play");
+        if (id == null) return;
+        i.removeExtra("play");
+        try {
+            pendingPlay = new JSONObject().put("id", id).put("pos", i.getLongExtra("pos", 0) / 1000.0);
+        } catch (Exception e) {
+            return;
+        }
+        deliverPlay();
+    }
+
+    /** Entrega o pedido à página (que espera o vídeo aparecer na lista antes de tocar). */
+    private void deliverPlay() {
+        if (!pageReady || pendingPlay == null) return;
+        final JSONObject req = pendingPlay;
+        web.evaluateJavascript("window.tvPlayId ? tvPlayId(" + req + ") : false", v -> {
+            if ("true".equals(v) && pendingPlay == req) pendingPlay = null;
+        });
     }
 
     @Override
@@ -67,8 +116,6 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
         int k = e.getKeyCode();
-        android.util.Log.i("onvlc", "tecla " + KeyEvent.keyCodeToString(k) + (e.getAction() == KeyEvent.ACTION_UP ? " solta" : " aperta")
-                + (e.getRepeatCount() > 0 ? " repete " + e.getRepeatCount() : ""));
         // o botão "voltar" do controle chega aqui antes do WebView
         if (k == KeyEvent.KEYCODE_BACK) {
             if (e.getAction() == KeyEvent.ACTION_UP) onBackPressed();
@@ -97,6 +144,7 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
             web.evaluateJavascript("window.onPlayerClosed && onPlayerClosed()", null);
         }
         player.stop(false);  // filme preparado (pausado atrás da página) sem ter começado
+        CacheServer.get(this).pause();  // e o cache para de baixar o filme que ficou para trás
         super.onPause();
     }
 

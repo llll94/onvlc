@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- onVLC na Mi Box: a biblioteca de filmes do PC (LibraryActivity) e o cache que fica entre o PC e o VLC
-     da TV, guardando uma janela do filme em volta do ponto que está tocando -->
+<!-- onVLC na Mi Box: a biblioteca de filmes do PC (LibraryActivity), com player próprio (motor do VLC) e o
+     cache que guarda uma janela do filme em volta do ponto que está tocando -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.lucas.tvcache"
     android:versionCode="4"
@@ -35,14 +35,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- aberta pelo PC via adb (Assistir na TV); não tem tela, só prepara o cache e abre o VLC -->
-        <activity
-            android:name=".PlayActivity"
-            android:exported="true"
-            android:excludeFromRecents="true"
-            android:noHistory="true"
-            android:theme="@android:style/Theme.NoDisplay" />
 
         <service
             android:name=".CacheService"

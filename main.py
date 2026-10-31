@@ -47,8 +47,6 @@ SUB_EXTS = {".srt", ".ass", ".ssa", ".vtt", ".sub"}
 SUB_DIRS = ["", "Subs", "Sub", "Legendas", "Legenda", "Subtitles"]
 ASPECTS = [None, "16:9", "4:3", "21:9", "1:1"]
 RATES = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
-# capítulo sem nome de verdade: "00:12:30.000", "Chapter 05", "Capítulo 5"
-GENERIC_CHAPTER = re.compile(r"^\s*((chapter|chap|cap[ií]tulo|cap)\.?\s*\d+|\d{1,2}(:\d{2}){1,2}([.,]\d+)?)\s*$", re.I)
 
 
 def _dec(x):
@@ -134,7 +132,6 @@ class Player(QObject):
         self._tvState.connect(self._on_tv)
         self.tv.refresh_async()
 
-        self.stream = tvstream.StreamServer()
         self.box = tvstream.MiBox()
         self.watching = False
         self.st["watch"] = {}
@@ -200,7 +197,7 @@ class Player(QObject):
 
     # ---------- estado para a interface ----------
     def _reset_media_state(self):
-        self.st.update(hasMedia=False, playing=False, pos=0.0, dur=0.0, title="", chapters=[],
+        self.st.update(hasMedia=False, playing=False, pos=0.0, dur=0.0, title="",
                        audio=[], audioId=-1, subs=[], subId=-1, subDelay=0.0, found=[], badge=False,
                        nextName="", prevName="", web=[], webStatus="idle", webMsg="")
         self._refresh_static()
@@ -258,14 +255,6 @@ class Player(QObject):
             self.st["subDelay"] = mp.video_get_spu_delay() / 1_000_000
         except Exception:
             pass
-        if not self.st["chapters"] and self.st["dur"] > 0:
-            try:
-                chs = list(mp.get_full_chapter_descriptions(-1) or [])
-                names = [_dec(c.name) if c.name else "" for c in chs]
-                self.st["chapters"] = [{"name": "" if GENERIC_CHAPTER.match(n) else n,
-                                        "start": c.time_offset / 1000} for n, c in zip(names, chs)]
-            except Exception:
-                pass
         self.st["badge"] = bool(self.st["found"]) and self.st["subId"] == -1
 
     @Slot(float, result=str)
@@ -517,12 +506,10 @@ class Player(QObject):
         """A página da biblioteca pediu um vídeo: {id, pos}. Abre aqui, no ponto pedido (0 = do começo)."""
         try:
             req = json.loads(data)
-            with urllib.request.urlopen("http://127.0.0.1:8780/api/library", timeout=3) as r:
-                lib = json.load(r)
+            items = self._library_items()
         except Exception:
             self.toast.emit("Não consegui falar com a biblioteca")
             return
-        items = list(lib["movies"]) + [e for s in lib["shows"] for se in s["seasons"] for e in se["episodes"]]
         it = next((x for x in items if x["id"] == req.get("id")), None)
         if not it or not it.get("path"):
             self.toast.emit("Esse vídeo não está mais na pasta onVLC")
@@ -599,14 +586,43 @@ class Player(QObject):
         log.info("fim do Assistir na TV: %s", msg)
         self._watchState.emit({"stage": "ended", "msg": msg, "pos": pos})
 
+    @staticmethod
+    def _library_items():
+        """Todos os vídeos que a biblioteca conhece (filmes e episódios), com id, caminho e posição."""
+        with urllib.request.urlopen("http://127.0.0.1:8780/api/library", timeout=3) as r:
+            lib = json.load(r)
+        return list(lib["movies"]) + [e for s in lib["shows"] for se in s["seasons"] for e in se["episodes"]]
+
+    @staticmethod
+    def _same_file(a, b):
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+    def _library_id(self, path):
+        """Id do vídeo na biblioteca: ele mesmo, se já está na pasta, ou o link/cópia com o mesmo nome."""
+        try:
+            items = self._library_items()
+        except Exception:
+            return None
+        for x in items:
+            if x.get("path") and self._same_file(x["path"], path):
+                return x["id"]
+        inside = str(tvfolder.lib_dir() / Path(path).name)
+        for x in items:
+            if x.get("path") and self._same_file(x["path"], inside) and not x.get("broken"):
+                return x["id"]
+        return None
+
     @Slot()
     def tvWatch(self):
+        """Assistir na TV: põe o vídeo na biblioteca (se ainda não está), liga Mi Box e TV e pede para o
+        app onVLC de lá tocar a partir daqui. Depois disso a TV cuida de tudo e manda a posição para a biblioteca."""
         if not self.path or self.watching:
             return
         path, title = self.path, Path(self.path).stem
         start = self.st["pos"]
         if self.mp.is_playing():
             self.mp.pause()
+        self._save_position()
         self.watching = True
         session = object()  # identifica esta tentativa; um clique novo invalida a anterior
         self.watch_session = session
@@ -618,61 +634,43 @@ class Player(QObject):
 
         def work():
             try:
-                info = tvfolder.probe(path) or {}
+                # 1. o vídeo precisa estar na biblioteca (pasta onVLC): de fora, vai por link ou cópia
+                vid = self._library_id(path)
+                if not vid:
+                    self._watchState.emit({"stage": "library", "title": title})
+                    msg = self.tv.add(path)
+                    log.info("Assistir na TV: %s", msg)
+                    waited = 0
+                    while alive() and not vid:
+                        time.sleep(2)
+                        waited += 2
+                        copying = [j for j in self.tv.jobs if j["src"] == Path(path)]
+                        if copying:
+                            self._watchState.emit({"stage": "library", "title": title, "p": copying[0]["p"]})
+                            waited = 0  # cópia de outro disco: espera o tempo que precisar
+                        elif waited > 120:
+                            raise RuntimeError("A biblioteca não leu o vídeo. Ela está aberta?")
+                        vid = self._library_id(path)
+                    if not alive():
+                        return
+                # 2. Mi Box e TV
                 if not self.box.connect(lambda m: self._watchState.emit({"stage": "wake", "title": title})):
                     raise RuntimeError("A Mi Box não respondeu. Ela está ligada na tomada?")
                 self.box.wake_screen()
                 if not self.box.ensure_tv(lambda m: self._watchState.emit({"stage": "tv", "title": title})):
                     log.warning("a TV não ligou; mandando mesmo assim")
+                # 3. o app onVLC toca
                 self._watchState.emit({"stage": "open", "title": title})
-                cache = self.box.has_cache_app()
                 for attempt in range(3):
-                    # endereço novo a cada tentativa: num endereço que já viu, o VLC ignora a posição pedida
-                    url = self.stream.share(path, self.box.ip)
-                    self.box.play(url, title, start * 1000, info.get("bps") or 16e6)
-                    if self.box.vlc_in_front():
+                    self.box.open_library(vid, start * 1000)
+                    if self.box.app_in_front():
                         break
-                    log.warning("o VLC não apareceu na TV (tentativa %d); mandando de novo", attempt + 1)
+                    log.warning("o onVLC não apareceu na TV (tentativa %d); pedindo de novo", attempt + 1)
                 else:
-                    raise RuntimeError("O VLC da TV não abriu o filme")
-                base = {"stage": "playing", "title": title, "cache": cache, "dur": info.get("dur", 0), "pos": start}
-                self._watchState.emit(dict(base, toast="Tocando na TV"))
-                n, tv_off, box_off = 0, 0, 0
-                while alive():
-                    time.sleep(1)
-                    n += 1
-                    # TV ou Mi Box desligada? Primeiro, e rápido (1 s no máximo cada); 3 seguidas para não
-                    # confundir com uma oscilação do Wi-Fi
-                    box_up, tv_up = self.box._port_open(), self.box.tv_on()
-                    box_off = 0 if box_up else box_off + 1
-                    tv_off = 0 if tv_up else tv_off + 1
-                    if tv_off >= 3 or box_off >= 3:
-                        what = "A TV foi desligada" if not tv_up else "A Mi Box foi desligada"
-                        self._watch_ended(f"{what} em {self._fmt(base['pos'])}", base["pos"])
-                        return
-                    if not box_up:
-                        continue  # sem a Mi Box, o adb só ficaria esperando
-                    data = dict(base)
-                    if cache:
-                        try:
-                            st = self.box.status()
-                            if n > 3 and st.get("src") and st["src"] != url:  # outra janela mandou outro vídeo
-                                self._watch_ended("Outra janela do onVLC assumiu a TV", base["pos"])
-                                return
-                            data.update(st)
-                        except Exception:
-                            pass
-                    if n % 2 == 0:
-                        try:  # posição exata pela sessão de mídia do Android
-                            tv_pos, tv_state = self.box.tv_position()
-                            # parado (TV desligando, VLC fechando) a posição vem 0: guarda a última boa
-                            if tv_pos is not None and tv_state in ("PLAYING", "PAUSED", "BUFFERING"):
-                                base.update(pos=tv_pos, tvState=tv_state)
-                        except Exception:
-                            pass
-                    data.update(pos=base["pos"], tvState=base.get("tvState", ""), dur=base["dur"])
-                    if alive():
-                        self._watchState.emit(data)
+                    raise RuntimeError("O onVLC da TV não abriu")
+                if alive():
+                    self.watch_id = vid
+                    self._watchState.emit({"stage": "playing", "title": title, "toast": "Tocando na TV"})
             except Exception as e:
                 log.exception("Assistir na TV falhou")
                 if self.watch_session is session:
@@ -698,22 +696,29 @@ class Player(QObject):
 
     @Slot()
     def tvWatchStop(self):
+        """Para na TV e continua aqui de onde ela parou (a posição chega pela biblioteca)."""
         if not self.watching:
             return
         self.watching = False
-        last = self.st.get("watch", {}).get("pos", 0)
+        vid = getattr(self, "watch_id", None)
         self._watchState.emit({"stage": "stopping"})
 
         def work():
-            pos = last
+            pos = None
             try:
-                tv_pos, _ = self.box.tv_position()
-                if tv_pos:
-                    pos = tv_pos
-                self.box.stop()
+                self.box.stop_library()
+                for _ in range(6):  # a TV manda a posição para a biblioteca logo depois de parar
+                    time.sleep(1)
+                    it = next((x for x in self._library_items() if x["id"] == vid), None)
+                    if it and it.get("pos"):
+                        pos = it["pos"]
+                        break
             except Exception:
-                pass
-            self._watchState.emit({"stage": "", "resume": pos, "toast": "Parou na TV em " + self._fmt(pos)})
+                log.exception("parar na TV")
+            if pos is None:
+                self._watchState.emit({"stage": "", "toast": "Parei a TV, mas não soube onde ela estava"})
+            else:
+                self._watchState.emit({"stage": "", "resume": pos, "toast": "Parou na TV em " + self._fmt(pos)})
         threading.Thread(target=work, daemon=True).start()
 
     @Slot()

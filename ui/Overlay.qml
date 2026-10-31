@@ -37,7 +37,6 @@ Item {
 
     readonly property real dur: s.dur || 0
     readonly property bool watchOn: !!(s.watch && s.watch.stage)
-    readonly property var chapters: (s.chapters && s.chapters.length) ? s.chapters : [{ name: "", start: 0 }]
 
     readonly property var cats: [
         { id: "midia", nome: "Mídia", ic: "film", desc: "Abrir e organizar o que vai tocar." },
@@ -55,11 +54,6 @@ Item {
         sec = Math.max(0, Math.floor(sec || 0))
         var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), x = sec % 60
         return (h ? h + ":" + (m < 10 ? "0" : "") + m : m) + ":" + (x < 10 ? "0" : "") + x
-    }
-    function chapAt(t) {
-        var i = 0
-        for (var k = 0; k < chapters.length; k++) if (t >= chapters[k].start) i = k
-        return i
     }
     function rateTxt(r) { return String(Math.round((r || 1) * 100) / 100).replace(".", ",") + "×" }
     function trackName(list, id) {
@@ -119,7 +113,7 @@ Item {
     // abre o balão sozinho no começo e quando algo acontece (TV desligada, outra janela, erro)
     onWatchStageChanged: {
         if (watchStage === "connect") seenStages = ["connect"]
-        else if (["wake", "tv", "open"].indexOf(watchStage) >= 0 && seenStages.indexOf(watchStage) < 0)
+        else if (["library", "wake", "tv", "open"].indexOf(watchStage) >= 0 && seenStages.indexOf(watchStage) < 0)
             seenStages = seenStages.concat([watchStage])
         if (watchStage === "connect" || watchStage === "ended") showWatch()
     }
@@ -678,59 +672,33 @@ Item {
                 font.family: root.uiFont; font.weight: Font.ExtraBold
                 font.pixelSize: Math.max(22, Math.min(38, root.width * 0.03))
             }
-            Row {
-                visible: root.chapters.length > 1
-                topPadding: 4
-                spacing: 6
-                readonly property int ci: root.chapAt(s.pos || 0)
-                readonly property string cname: root.chapters[ci] ? root.chapters[ci].name : ""
-                Text { text: "Capítulo " + (parent.ci + 1) + (parent.cname ? " ·" : ""); color: Qt.rgba(1, 1, 1, 0.7); font.family: root.uiFont; font.pixelSize: 14 }
-                Text { visible: parent.cname !== ""; text: parent.cname; color: root.orange; font.family: root.uiFont; font.pixelSize: 14; font.weight: Font.DemiBold }
-            }
             Item { width: 1; height: 12 }
 
-            // linha do tempo dividida em capítulos
+            // linha do tempo
             Item {
                 width: parent.width
                 height: 22
                 Item {
                     id: tl
                     anchors { left: parent.left; right: remain.left; rightMargin: 14; top: parent.top; bottom: parent.bottom }
-                    readonly property real gap: 3
-                    readonly property real usable: width - gap * (root.chapters.length - 1)
                     readonly property bool hovering: tma.containsMouse || tma.pressed
-                    Row {
+                    Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
-                        spacing: tl.gap
-                        Repeater {
-                            model: root.chapters.length
-                            delegate: Item {
-                                required property int index
-                                readonly property real a: root.chapters[index] ? root.chapters[index].start : 0
-                                readonly property real b: index < root.chapters.length - 1 ? root.chapters[index + 1].start : root.dur
-                                readonly property bool hot: tl.hovering && root.chapters.length > 1 && root.chapAt(root.hoverP * root.dur) === index
-                                width: root.dur > 0 ? Math.max(2, (b - a) / root.dur * tl.usable) : tl.usable / root.chapters.length
-                                height: 10
-                                Rectangle {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    width: parent.width
-                                    height: parent.hot ? 10 : (tl.hovering ? 6 : 4)
-                                    Behavior on height { NumberAnimation { duration: 120 } }
-                                    radius: 2
-                                    clip: true
-                                    color: Qt.rgba(1, 1, 1, 0.22)
-                                    Rectangle {
-                                        height: parent.height
-                                        color: Qt.rgba(1, 1, 1, 0.35)
-                                        width: tl.hovering && root.hoverP >= 0 ? parent.width * Math.max(0, Math.min(1, (root.hoverP * root.dur - a) / Math.max(0.001, b - a))) : 0
-                                    }
-                                    Rectangle {
-                                        height: parent.height
-                                        color: root.orange
-                                        width: parent.width * Math.max(0, Math.min(1, ((s.pos || 0) - a) / Math.max(0.001, b - a)))
-                                    }
-                                }
-                            }
+                        width: parent.width
+                        height: tl.hovering ? 6 : 4
+                        Behavior on height { NumberAnimation { duration: 120 } }
+                        radius: 2
+                        clip: true
+                        color: Qt.rgba(1, 1, 1, 0.22)
+                        Rectangle {
+                            height: parent.height
+                            color: Qt.rgba(1, 1, 1, 0.35)
+                            width: tl.hovering && root.hoverP >= 0 ? parent.width * root.hoverP : 0
+                        }
+                        Rectangle {
+                            height: parent.height
+                            color: root.orange
+                            width: parent.width * (root.dur > 0 ? Math.max(0, Math.min(1, (s.pos || 0) / root.dur)) : 0)
                         }
                     }
                     Rectangle {
@@ -742,12 +710,11 @@ Item {
                         scale: tl.hovering ? 1 : 0.75
                         Behavior on scale { NumberAnimation { duration: 120 } }
                     }
-                    // prévia ao passar o mouse: miniatura (quando já existe) + capítulo + horário
+                    // prévia ao passar o mouse: miniatura (quando já existe) + horário
                     Rectangle {
                         id: tip
                         visible: tl.hovering && root.hoverP >= 0 && root.dur > 0
                         readonly property string thumb: visible ? player.thumbAt(root.hoverP * root.dur) : ""
-                        readonly property int ci: root.chapAt(root.hoverP * root.dur)
                         width: Math.max(thumb ? 248 : 0, tipRow.implicitWidth + 16)
                         height: (thumb ? thumbImg.height + 4 : 0) + 28
                         radius: 7
@@ -769,12 +736,6 @@ Item {
                             anchors { bottom: parent.bottom; horizontalCenter: parent.horizontalCenter }
                             height: 28
                             spacing: 8
-                            Text {
-                                visible: root.chapters.length > 1
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: root.chapters[tip.ci] ? (root.chapters[tip.ci].name || "Capítulo " + (tip.ci + 1)) : ""
-                                color: "white"; font.family: root.uiFont; font.pixelSize: 12; font.weight: Font.DemiBold
-                            }
                             Text { anchors.verticalCenter: parent.verticalCenter; text: root.fmt(root.hoverP * root.dur); color: "white"; font.family: root.monoFont; font.pixelSize: 12 }
                         }
                     }
@@ -1160,13 +1121,12 @@ Item {
         name: "tv"
         width: 330; height: (root.watchOn ? watchCol : tvCol).implicitHeight + 28
 
-        // assistindo na TV: a janela guardada na Mi Box em volta do ponto que está tocando
+        // assistindo na TV: as etapas até o app onVLC da Mi Box abrir, e depois o botão de voltar para cá
         Column {
             id: watchCol
             readonly property var w: s.watch || ({})
             readonly property bool playing: w.stage === "playing"
             readonly property bool ended: w.stage === "ended"
-            readonly property real total: w.dur || 1
             visible: root.watchOn
             x: 14; y: 14; width: parent.width - 28
             spacing: 8
@@ -1184,8 +1144,10 @@ Item {
                     width: watchCol.width; height: 20
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: ({ connect: "Conectando na Mi Box", wake: "Acordando a Mi Box", tv: "Ligando a TV",
-                                 open: "Abrindo no VLC da TV" })[parent.modelData] + (parent.current ? "…" : "")
+                        text: ({ connect: "Conectando na Mi Box", library: "Colocando na biblioteca", wake: "Acordando a Mi Box",
+                                 tv: "Ligando a TV", open: "Abrindo no onVLC da TV" })[parent.modelData]
+                              + (parent.modelData === "library" && parent.current && watchCol.w.p ? " " + watchCol.w.p + "%" : "")
+                              + (parent.current ? "…" : "")
                         color: parent.current ? "white" : root.mutedText
                         font.family: root.uiFont; font.pixelSize: 13
                     }
@@ -1224,93 +1186,18 @@ Item {
                 onClicked: player.tvRetry()
             }
             Link { visible: watchCol.ended; label: "Fechar"; onClicked: { player.tvResumeHere(); root.popName = "" } }
-            Item {
-                visible: watchCol.playing
-                width: parent.width; height: 16
-                Text { text: root.fmt(watchCol.w.pos) + (watchCol.w.tvState === "PAUSED" ? "  ❚❚" : ""); color: root.mutedText; font.family: root.monoFont; font.pixelSize: 12 }
-                Text { anchors.right: parent.right; text: root.fmt(watchCol.w.dur); color: root.mutedText; font.family: root.monoFont; font.pixelSize: 12 }
-            }
-            // filme inteiro: mostra também os trechos guardados de antes
-            Rectangle {
-                visible: watchCol.playing
-                width: parent.width; height: 6; radius: 3
-                color: Qt.rgba(1, 1, 1, 0.1)
-                clip: true
-                Repeater {
-                    model: (watchCol.w.ranges || []).length
-                    delegate: Rectangle {
-                        required property int index
-                        readonly property var r: watchCol.w.ranges[index] || [0, 0]
-                        x: parent.width * r[0] / watchCol.total; width: Math.max(1, parent.width * (r[1] - r[0]) / watchCol.total); height: parent.height
-                        color: Qt.rgba(1, 1, 1, 0.35)
-                    }
-                }
-                Rectangle { x: parent.width * (watchCol.w.pos || 0) / watchCol.total - 1; width: 3; height: parent.height; color: root.orange }
-            }
-            Item {
-                visible: watchCol.playing
-                width: parent.width; height: 14
-                Text { text: "−1:30"; color: root.mutedText; font.family: root.monoFont; font.pixelSize: 11 }
-                Text { anchors.horizontalCenter: parent.horizontalCenter; text: "perto de agora"; color: root.mutedText; font.family: root.uiFont; font.pixelSize: 11 }
-                Text { anchors.right: parent.right; text: "+5:30"; color: root.mutedText; font.family: root.monoFont; font.pixelSize: 11 }
-            }
-            // zoom de 7 min em volta do ponto que está tocando, onde dá para ver a janela
-            Rectangle {
-                id: wbar
-                visible: watchCol.playing
-                width: parent.width; height: 14; radius: 7
-                color: Qt.rgba(1, 1, 1, 0.1)
-                clip: true
-                readonly property real from: (watchCol.w.pos || 0) - 90
-                function px(t) { return width * Math.max(0, Math.min(1, ((t || 0) - from) / 420)) }
-                Repeater {
-                    model: (watchCol.w.ranges || []).length
-                    delegate: Rectangle {
-                        required property int index
-                        readonly property var r: watchCol.w.ranges[index] || [0, 0]
-                        x: wbar.px(r[0]); width: Math.max(1, wbar.px(r[1]) - wbar.px(r[0])); height: wbar.height
-                        color: Qt.rgba(1, 1, 1, 0.28)
-                    }
-                }
-                Rectangle {
-                    x: wbar.px(watchCol.w.pos - (watchCol.w.behind || 0)); height: wbar.height
-                    width: wbar.px(watchCol.w.pos) - x
-                    color: Qt.rgba(1, 0.54, 0.12, 0.45)
-                }
-                Rectangle {
-                    x: wbar.px(watchCol.w.pos); height: wbar.height
-                    width: wbar.px(watchCol.w.pos + (watchCol.w.ahead || 0)) - x
-                    color: root.orange
-                }
-                Rectangle { x: wbar.px(watchCol.w.pos) - 1; width: 3; height: wbar.height; color: "white" }
-            }
-            Repeater {
-                model: watchCol.playing && watchCol.w.cache
-                       ? [["À frente", root.fmt(watchCol.w.ahead) + " de 5:00", root.orange],
-                          ["Atrás", root.fmt(watchCol.w.behind) + " de 1:00", Qt.rgba(1, 0.54, 0.12, 0.45)],
-                          ["Guardado na Mi Box", ((watchCol.w.cachedMb || 0) / 1024).toFixed(2).replace(".", ",") + " de 2 GB", Qt.rgba(1, 1, 1, 0.28)],
-                          ["Wi-Fi", Math.round(watchCol.w.mbps || 0) + " Mbps", "transparent"]]
-                       : []
-                delegate: Item {
-                    required property var modelData
-                    width: watchCol.width; height: 18
-                    Rectangle { anchors.verticalCenter: parent.verticalCenter; width: 10; height: 10; radius: 3; color: modelData[2] }
-                    Text { x: 18; anchors.verticalCenter: parent.verticalCenter; text: modelData[0]; color: root.mutedText; font.family: root.uiFont; font.pixelSize: 12 }
-                    Text { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; text: modelData[1]; color: "white"; font.family: root.monoFont; font.pixelSize: 12 }
-                }
-            }
             Text {
-                visible: watchCol.playing && !watchCol.w.cache
+                visible: watchCol.playing
                 width: parent.width
-                wrapMode: Text.Wrap
-                text: "O TV Cache não está instalado na Mi Box: a TV lê direto do PC, só com a reserva curta do próprio VLC."
-                color: root.mutedText; font.family: root.uiFont; font.pixelSize: 12
+                elide: Text.ElideRight
+                text: watchCol.w.title || ""
+                color: "white"; font.family: root.uiFont; font.pixelSize: 14
             }
             Text {
                 visible: watchCol.playing
                 width: parent.width
                 wrapMode: Text.Wrap
-                text: "Use o controle da TV para pausar e pular. Deixe este app aberto (pode minimizar) enquanto assiste."
+                text: "Use o controle da TV para pausar e pular. A posição fica salva na biblioteca."
                 color: root.mutedText; font.family: root.uiFont; font.pixelSize: 12
             }
             Link { visible: watchCol.playing; label: "Parar na TV e continuar aqui"; onClicked: player.tvWatchStop() }
@@ -1324,7 +1211,7 @@ Item {
             Text { text: "Enviar para TV"; color: "white"; font.family: root.uiFont; font.pixelSize: 13; font.bold: true }
             Repeater {
                 // [ícone, título, explicação, ação]; sem ação = ainda não existe
-                model: [["tv", "Assistir na TV", "Abre no VLC da Mi Box na hora, sem copiar.", "watch"],
+                model: [["tv", "Assistir na TV", "Abre no onVLC da Mi Box, deste ponto.", "watch"],
                         ["folder", "Pasta onVLC", "Deixa na biblioteca da TV para ver quando quiser.", "folder"]]
                 delegate: Rectangle {
                     id: dst
@@ -1685,28 +1572,10 @@ Item {
         Timer { id: toastTimer; interval: 2200; onTriggered: toastBox.opacity = 0 }
     }
 
-    Rectangle {
-        id: hint
-        z: 49
-        anchors.horizontalCenter: parent.horizontalCenter
-        y: parent.height * 0.4
-        width: Math.min(hintText.implicitWidth + 28, root.width - 32)
-        height: 38; radius: 10
-        color: Qt.rgba(30 / 255, 31 / 255, 36 / 255, 0.9)
-        border.color: root.line
-        Behavior on opacity { NumberAnimation { duration: 400 } }
-        Text {
-            id: hintText
-            anchors.centerIn: parent
-            text: "Mouse embaixo: controles · em cima: menu · rodinha: volume · ↑↓: velocidade · Tab: menu"
-            color: Qt.rgba(1, 1, 1, 0.85); font.family: root.uiFont; font.pixelSize: 13
-        }
-    }
-
     Timer {
         interval: 5000
         running: true
-        onTriggered: { hint.opacity = 0; root.showTop = false; root.showBottom = false }
+        onTriggered: { root.showTop = false; root.showBottom = false }
     }
 
     Component.onCompleted: {

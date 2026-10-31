@@ -706,6 +706,26 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_GET(self):
+        self._safe(self._get)
+
+    def do_POST(self):
+        self._safe(self._post)
+
+    def _safe(self, fn):
+        """Um erro num pedido vira um 500 registrado no log, em vez de a conexão cair sem explicação
+        (a TV entendia como "PC desligado")."""
+        try:
+            fn()
+        except (ConnectionError, BrokenPipeError):
+            pass
+        except Exception:
+            log.exception("pedido %s %s", self.command, self.path)
+            try:
+                self._send(500, {"ok": False})
+            except Exception:
+                pass
+
+    def _get(self):
         path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         if path.startswith("/tv/api/") or path.startswith("/tv/img/"):
             path = path[3:]
@@ -750,7 +770,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, f.read_bytes(), TYPES.get(f.suffix, "application/octet-stream"))
         self._send(404, b"", "text/plain")
 
-    def do_POST(self):
+    def _post(self):
         path = urllib.parse.urlsplit(self.path).path
         if path.startswith("/tv/api/"):
             path = path[3:]

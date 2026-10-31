@@ -1,39 +1,31 @@
-"""Assistir na TV: o PC serve o vídeo original por HTTP e o VLC da Mi Box toca.
+"""Mi Box pelo adb (Assistir na TV) e o envio de vídeo por HTTP com Range, usado pela biblioteca.
 
-Entre os dois fica o app TV Cache (pasta android\\), que guarda uma janela de blocos em volta do
-ponto que está tocando: 5 min à frente, 1 min atrás e até 2 GB do que já baixou. Sem o app
-instalado, o VLC da TV lê direto do PC (funciona, só que com a reserva pequena do próprio VLC).
+"Assistir na TV" pede para o app onVLC da Mi Box (pasta android\\) tocar um vídeo da biblioteca num ponto.
+O app toca com o próprio motor, passando pelo cache dele, e manda a posição para a biblioteca do PC.
 """
-import json
 import logging
 import os
 import re
-import secrets
 import shutil
 import socket
 import subprocess
-import threading
 import time
-import urllib.parse
-import urllib.request
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-PORT = 8765
 BOX_IP = "192.168.1.31"
 BOX_MAC = "AA-BB-CC-00-00-01"
 TV_IP, TV_MAC = "192.168.1.13", "AA-BB-CC-00-00-03"  # LG C1; porta 3000 só responde com ela ligada
-CACHE_PKG = "com.lucas.tvcache"
-VLC_PKG = "org.videolan.vlc"
-STATUS_PORT = 8091  # adb forward tcp:8091 → TV Cache (127.0.0.1:8090 na Mi Box)
+APP_PKG = "com.lucas.tvcache"
+APP_ACTIVITY = APP_PKG + "/.LibraryActivity"
 NO_WINDOW = 0x08000000
 CHUNK = 1024 * 1024
 log = logging.getLogger("onvlc.tv")
 
 
-# ---------- servidor de vídeo ----------
+# ---------- envio de vídeo ----------
 def send_file(h, path, body=True):
-    """Responde um pedido HTTP com o arquivo, aceitando Range (o VLC e o TV Cache pedem pedaços)."""
+    """Responde um pedido HTTP com o arquivo, aceitando Range (o cache da TV pede pedaços)."""
     if not path or not os.path.isfile(path):
         h.send_error(404)
         return
@@ -46,7 +38,7 @@ def send_file(h, path, body=True):
             end = min(size - 1, int(m.group(2))) if m.group(2) else size - 1
         else:  # bytes=-N: os últimos N bytes
             start = max(0, size - int(m.group(2)))
-        if start >= size:
+        if start >= size or end < start:
             h.send_response(416)
             h.send_header("Content-Range", f"bytes */{size}")
             h.end_headers()
@@ -72,35 +64,7 @@ def send_file(h, path, body=True):
                 h.wfile.write(data)
                 left -= len(data)
         except (ConnectionError, OSError):
-            pass  # o VLC fechou a conexão para pular para outro ponto: normal
-
-
-class _Handler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-
-    def log_message(self, *a):
-        pass
-
-    def _file(self):
-        m = re.match(r"^/v/([A-Za-z0-9_-]+)/", self.path)
-        return self.server.files.get(m.group(1)) if m else None
-
-    def do_HEAD(self):
-        self._serve(body=False)
-
-    def do_GET(self):
-        self._serve(body=True)
-
-    def _serve(self, body):
-        if self.path == "/ping":  # o próprio onVLC confere se é ele que responde nesta porta
-            data = self.server.nonce.encode()
-            self.send_response(200)
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            if body:
-                self.wfile.write(data)
-            return
-        send_file(self, self._file(), body)
+            pass  # o player fechou a conexão para pular para outro ponto: normal
 
 
 class _Server(ThreadingHTTPServer):
@@ -115,63 +79,6 @@ class _Server(ThreadingHTTPServer):
         super().server_bind()
 
 
-class StreamServer:
-    def __init__(self):
-        self.httpd = None
-        self.port = PORT
-
-    def start(self, lan_ip):
-        if self.httpd:
-            return
-        # cada janela do onVLC pega a primeira porta em que ela mesma responde pelo IP da rede
-        # (a regra do firewall vale para o programa todo, qualquer porta)
-        for port in range(PORT, PORT + 10):
-            try:
-                httpd = _Server(("0.0.0.0", port), _Handler)
-            except OSError:
-                continue
-            httpd.files = {}
-            httpd.nonce = secrets.token_hex(8)
-            threading.Thread(target=httpd.serve_forever, daemon=True).start()
-            try:
-                with urllib.request.urlopen(f"http://{lan_ip}:{port}/ping", timeout=2) as r:
-                    ours = r.read().decode() == httpd.nonce
-            except Exception:
-                ours = False
-            if ours:
-                self.httpd, self.port = httpd, port
-                log.info("servidor de vídeo na porta %d", port)
-                return
-            log.warning("porta %d responde por outro programa; tentando a próxima", port)
-            httpd.shutdown()
-            httpd.server_close()
-        raise RuntimeError(f"Nenhuma porta livre entre {PORT} e {PORT + 9}")
-
-    def share(self, path, box_ip):
-        """Libera um arquivo e devolve o endereço dele, como a Mi Box enxerga o PC."""
-        lan_ip = local_ip(box_ip)
-        self.start(lan_ip)
-        token = secrets.token_urlsafe(12)
-        # endereços anteriores do mesmo vídeo continuam valendo (o TV Cache pode ainda estar usando um deles);
-        # de outro vídeo, não
-        files = {t: p for t, p in self.httpd.files.items() if p == str(path)}
-        files[token] = str(path)
-        self.httpd.files = files
-        # o tamanho no caminho deixa o TV Cache reconhecer o mesmo filme numa próxima vez (o token muda)
-        return (f"http://{lan_ip}:{self.port}/v/{token}/{os.path.getsize(path)}/"
-                + urllib.parse.quote(Path(path).name))
-
-
-def local_ip(peer):
-    """IP deste PC na rede da Mi Box."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect((peer, 9))
-        return s.getsockname()[0]
-    finally:
-        s.close()
-
-
 # ---------- Mi Box ----------
 def _q(s):
     """Aspas simples para o shell do Android."""
@@ -181,7 +88,14 @@ def _q(s):
 class MiBox:
     def __init__(self, ip=BOX_IP):
         self.ip = ip
-        self.adb = shutil.which("adb") or self._winget_adb()
+        self._adb = None
+
+    @property
+    def adb(self):
+        # procurado só quando a TV for usada: não atrasa a abertura do player
+        if self._adb is None:
+            self._adb = shutil.which("adb") or self._winget_adb() or ""
+        return self._adb
 
     @staticmethod
     def _winget_adb():
@@ -275,69 +189,23 @@ class MiBox:
         return False
 
     def wake_screen(self):
-        # acorda a tela; pelo HDMI-CEC a TV liga junto
+        # acorda a tela; pelo HDMI-CEC a TV liga junto (e a tela inicial do Google TV vem para frente)
         self.shell("input keyevent KEYCODE_WAKEUP")
 
-    def has_cache_app(self):
-        return "package:" in self.shell(f"pm path {CACHE_PKG}")
-
-    def play(self, url, title, pos_ms, bps):
-        """Abre no VLC da TV, passando pelo TV Cache quando ele está instalado."""
-        if self.has_cache_app():
-            cmd = (f"am start -n {CACHE_PKG}/.PlayActivity -d {_q(url)} --es title {_q(title)} "
-                   f"--el position {int(pos_ms)} --el bps {int(bps)}")
-        else:
-            cmd = (f"am start -n {VLC_PKG}/org.videolan.vlc.gui.video.VideoPlayerActivity -a android.intent.action.VIEW "
-                   f"-d {_q(url)} -t video/* --es title {_q(title)} --el position {int(pos_ms)}")
-        out = self.shell(cmd)
+    def open_library(self, video_id, pos_ms):
+        """Pede para o app onVLC tocar um vídeo da biblioteca a partir de pos_ms."""
+        out = self.shell(f"am start -n {APP_ACTIVITY} --es play {_q(video_id)} --el pos {int(pos_ms)}")
         log.info("abrindo na TV em %ds: %s", pos_ms // 1000, out.replace("\n", " ")[:200])
         return out
 
-    def vlc_in_front(self, timeout=8):
-        """Espera o VLC aparecer na tela da TV (ao acordar, a tela inicial do Android pode passar por cima)."""
+    def stop_library(self):
+        """Para o filme que o app onVLC está tocando (ele manda a posição para a biblioteca)."""
+        self.shell(f"am start -n {APP_ACTIVITY} --ez stop true")
+
+    def app_in_front(self, timeout=8):
+        """Espera o app onVLC aparecer na tela (ao acordar, a tela inicial do Google TV pode passar por cima)."""
         for _ in range(int(timeout)):
-            if VLC_PKG in self.shell("dumpsys window | grep mCurrentFocus", timeout=5):
+            if APP_PKG in self.shell("dumpsys window | grep mCurrentFocus", timeout=5):
                 return True
             time.sleep(1)
         return False
-
-    def status(self):
-        """Janela do TV Cache: posição, à frente, atrás, guardado, velocidade."""
-        if not getattr(self, "_forwarded", False):
-            self.run("-s", self.serial, "forward", f"tcp:{STATUS_PORT}", "tcp:8090", timeout=5)
-            self._forwarded = True
-        try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{STATUS_PORT}/status", timeout=2) as r:
-                return json.load(r)
-        except Exception:
-            self._forwarded = False  # a conexão do adb caiu: refaz o túnel na próxima
-            raise
-
-    def tv_position(self):
-        """Onde o VLC da TV está, em segundos (pela sessão de mídia do Android), e se está tocando."""
-        out = self.shell("cat /proc/uptime; dumpsys media_session", timeout=5)
-        # o Android guarda também sessões antigas do VLC (paradas); vale a que está tocando ou pausada
-        found = []
-        for part in out.split("package=")[1:]:
-            if not part.startswith(VLC_PKG):
-                continue
-            m = re.search(r"state=PlaybackState \{state=(\w+)\(\d+\), position=(-?\d+),.*?speed=([\d.]+), updated=(\d+)", part)
-            if m:
-                found.append(m)
-        active = [m for m in found if m.group(1) in ("PLAYING", "PAUSED", "BUFFERING")]
-        m = (active or found or [None])[0]
-        if not m:
-            return None, None
-        state, pos = m.group(1), max(0, int(m.group(2))) / 1000
-        if state == "PLAYING":
-            # o Android só grava a posição quando o estado muda; soma o tempo desde então
-            uptime = float(out.split()[0])
-            pos += max(0.0, uptime - int(m.group(4)) / 1000) * float(m.group(3))
-        return pos, state
-
-    def stop(self):
-        self.shell("input keyevent KEYCODE_MEDIA_STOP")
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:{STATUS_PORT}/stop", timeout=2).read()
-        except Exception:
-            pass

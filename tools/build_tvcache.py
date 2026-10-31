@@ -23,6 +23,9 @@ LIBVLC_VERSION = "3.7.7"
 LIBVLC_AAR = f"https://repo1.maven.org/maven2/org/videolan/android/libvlc-all/{LIBVLC_VERSION}/libvlc-all-{LIBVLC_VERSION}.aar"
 LIBVLC_DIR = ROOT / "build" / "libvlc"
 ABI = "armeabi-v7a"  # a Mi Box (32 bits)
+# chave própria do app (precisa ser sempre a mesma para atualizar por cima): fica fora do repositório,
+# e a senha, no Gerenciador de Credenciais do Windows (serviço onVLC, "apk_keystore")
+KEYSTORE = Path(os.environ["LOCALAPPDATA"]) / "onVLC" / "tvcache.keystore"
 
 
 def libvlc():
@@ -102,13 +105,22 @@ def main():
     aligned = OUT / "aligned.apk"
     run(bt / "zipalign.exe", "-f", "4", base, aligned)
 
-    ks = SRC / "tvcache.keystore"  # chave própria do app; precisa ser a mesma para atualizar por cima
-    if not ks.exists():
-        run(jdk / "bin" / "keytool.exe", "-genkeypair", "-keystore", ks, "-alias", "tvcache", "-storepass", "android",
-            "-keypass", "android", "-dname", "CN=Lucas", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000")
+    import keyring
+    import secrets
+    ks = KEYSTORE
+    pw = keyring.get_password("onVLC", "apk_keystore")
+    if not ks.exists():  # só na primeira vez: um app instalado com outra chave não aceita atualização
+        pw = secrets.token_urlsafe(24)
+        ks.parent.mkdir(parents=True, exist_ok=True)
+        run(jdk / "bin" / "keytool.exe", "-genkeypair", "-keystore", ks, "-alias", "tvcache", "-storepass", pw,
+            "-keypass", pw, "-dname", "CN=Lucas", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000")
+        keyring.set_password("onVLC", "apk_keystore", pw)
+    if not pw:
+        sys.exit("Senha da chave do APK não está no Gerenciador de Credenciais (onVLC / apk_keystore)")
     apk = ROOT / "dist" / "tvcache.apk"
     apk.parent.mkdir(exist_ok=True)
-    run(bt / "apksigner.bat", "sign", "--ks", ks, "--ks-pass", "pass:<senha>", "--out", apk, aligned, env=env)
+    run(bt / "apksigner.bat", "sign", "--ks", ks, "--ks-pass", "env:ONVLC_KS", "--out", apk, aligned,
+        env=dict(env, ONVLC_KS=pw))
     print("pronto:", apk)
 
     if "--no-install" not in sys.argv:

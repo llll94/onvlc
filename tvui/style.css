@@ -6,7 +6,7 @@ html, body { margin: 0; height: 100%; background: #0b0b0c; overflow: hidden; }
   color: #f4f2ee; font-family: var(--font); background: #0b0b0c; overflow: hidden; }
 [hidden] { display: none !important; }
 html.pc #pc, html.pc .clock { display: none; }  /* dentro do onVLC do PC: o aviso de "PC ligado" não faz sentido */
-html.pc .card, html.pc .btn, html.pc .tab { cursor: pointer; }
+html.pc .card, html.pc .btn { cursor: pointer; }
 img { display: block; }
 
 .bg { position: absolute; inset: 0; background: #0b0b0c center top / cover no-repeat; opacity: 0; transition: opacity .4s ease; }
@@ -19,10 +19,6 @@ img { display: block; }
 .bar { position: absolute; left: 96px; right: 96px; top: 44px; height: 56px; display: flex; align-items: center; gap: 40px; font-size: 26px; z-index: 5; }
 .brand { display: flex; align-items: center; gap: 14px; font-weight: 800; font-size: 30px; }
 .brand img { width: 44px; height: 44px; }
-nav { display: flex; gap: 10px; }
-nav .tab { color: rgba(255,255,255,.62); font-weight: 600; padding: 8px 20px; border-radius: 999px; transition: background .15s, color .15s; }
-nav .tab.cur { color: #fff; }
-nav .tab.focus { background: #fff; color: #111; }
 .sp { flex: 1; }
 .pill { display: flex; align-items: center; gap: 10px; font-size: 22px; font-weight: 600; background: rgba(0,0,0,.55); padding: 8px 18px; border-radius: 999px; }
 #pc::before { content: ""; width: 12px; height: 12px; border-radius: 50%; background: #3ecf6e; }
@@ -79,9 +75,9 @@ nav .tab.focus { background: #fff; color: #111; }
 .detail .logo img { max-height: 200px; max-width: 700px; object-fit: contain; object-position: left bottom; filter: drop-shadow(0 4px 18px rgba(0,0,0,.6)); }
 .detail .syn { -webkit-line-clamp: 4; }
 .btns { display: flex; gap: 22px; margin-top: 40px; }
-.btn { font-size: 28px; font-weight: 700; color: #fff; background: rgba(255,255,255,.14); border-radius: 14px; padding: 20px 34px; display: flex; align-items: center; gap: 14px; transition: transform .14s, background .14s; white-space: nowrap; }
+.btn { font-size: 28px; font-weight: 500; color: #fff; background: rgba(255,255,255,.14); border-radius: 14px; padding: 20px 34px; display: flex; align-items: center; gap: 12px; transition: transform .14s, background .14s; white-space: nowrap; }
 .btn.focus { background: #fff; color: #111; transform: scale(1.05); }
-.btn .tri { border-left: 18px solid currentColor; border-top: 11px solid transparent; border-bottom: 11px solid transparent; }
+.btn svg { width: 30px; height: 30px; flex: none; }
 .facts { margin-top: 44px; display: grid; grid-template-columns: 180px 1fr; gap: 12px 24px; font-size: 24px; }
 .facts dt { color: rgba(255,255,255,.5); }
 .facts dd { margin: 0; color: rgba(255,255,255,.88); overflow-wrap: anywhere; }
@@ -121,15 +117,13 @@ html.playing #tv > .bg, html.playing #tv > .shade, html.playing #tv > .bar, html
 .pl-clock { font-size: 26px; font-variant-numeric: tabular-nums; }
 .pl-bottom { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 96px 56px; height: 420px; display: flex; flex-direction: column; justify-content: flex-end;
   background: linear-gradient(transparent, rgba(0,0,0,.85) 55%); }
-.pl-chap { font-size: 26px; color: rgba(255,255,255,.75); margin-bottom: 18px; min-height: 34px; }
-.pl-chap b { color: var(--o); font-weight: 700; }
 .pl-barrow { display: flex; align-items: center; gap: 26px; }
 .pl-time { font-variant-numeric: tabular-nums; font-size: 28px; min-width: 130px; font-weight: 600; }
 .pl-time.r { text-align: right; color: rgba(255,255,255,.7); }
 .pl-bar { position: relative; flex: 1; height: 44px; display: flex; align-items: center; }
-.pl-segs { position: absolute; left: 0; right: 0; height: 8px; display: flex; gap: 5px; transition: height .15s; }
+.pl-segs { position: absolute; left: 0; right: 0; height: 8px; display: flex; transition: height .15s; }
 .pl-bar.focus .pl-segs { height: 14px; }
-.pl-seg { position: relative; height: 100%; border-radius: 4px; background: rgba(255,255,255,.22); overflow: hidden; flex: none; }
+.pl-seg { position: relative; height: 100%; border-radius: 4px; background: rgba(255,255,255,.22); overflow: hidden; flex: 1; }
 .pl-seg .c { position: absolute; top: 0; bottom: 0; background: rgba(255,255,255,.38); }
 .pl-seg .p { position: absolute; left: 0; top: 0; bottom: 0; background: var(--o); }
 .pl-head { position: absolute; width: 26px; height: 26px; border-radius: 50%; background: var(--o); margin-left: -13px; transform: scale(.8); transition: transform .15s; }
@@ -137,7 +131,7 @@ html.playing #tv > .bg, html.playing #tv > .shade, html.playing #tv > .bar, html
 .pl-prev { position: absolute; bottom: 64px; width: 400px; margin-left: -200px; border-radius: 12px; overflow: hidden; background: #111;
   box-shadow: 0 0 0 4px #fff, 0 20px 50px rgba(0,0,0,.6); }
 .pl-prev img { width: 400px; height: 225px; object-fit: cover; background: #222; }
-.pl-prev .pt { padding: 10px 14px; font-size: 22px; display: flex; justify-content: space-between; gap: 12px; background: #161618; }
+.pl-prev .pt { padding: 10px 14px; font-size: 22px; display: flex; justify-content: center; background: #161618; }
 .pl-prev .pt b { font-variant-numeric: tabular-nums; }
 .pl-btns { display: flex; align-items: center; gap: 18px; margin-top: 34px; }
 .pl-btns .sp { flex: 1; }
@@ -171,18 +165,6 @@ html.playing #tv > .bg, html.playing #tv > .shade, html.playing #tv > .bar, html
 .pl-opt span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pl-opt.focus { background: #fff; color: #111; }
 .pl-opt.focus i { color: #111; }
-.pl-chaps { position: absolute; left: 0; right: 0; bottom: 0; height: 470px; padding: 0 96px 70px; background: linear-gradient(transparent, rgba(0,0,0,.92) 35%);
-  display: flex; flex-direction: column; justify-content: flex-end; transform: translateY(100%); transition: transform .25s ease; }
-.pl-chaps.on { transform: none; }
-.pl-chaps h3 { margin: 0 0 24px; font-size: 30px; }
-.pl-cstrip { display: flex; gap: 26px; transition: transform .25s ease; }
-.pl-cc { flex: none; width: 360px; }
-.pl-cc .im { width: 360px; height: 202px; border-radius: 12px; overflow: hidden; background: #222; transition: transform .15s, box-shadow .15s; }
-.pl-cc img { width: 100%; height: 100%; object-fit: cover; }
-.pl-cc .ct { margin-top: 12px; font-size: 22px; display: flex; justify-content: space-between; gap: 10px; color: rgba(255,255,255,.8); }
-.pl-cc .ct b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pl-cc.focus .im { transform: scale(1.06); box-shadow: 0 0 0 5px var(--o); }
-.pl-cc.now .ct b { color: var(--o); }
 .pl-next { position: absolute; right: 96px; bottom: 96px; width: 620px; border-radius: 18px; overflow: hidden; background: #161618; box-shadow: 0 30px 60px rgba(0,0,0,.6); }
 .pl-next img { width: 620px; height: 349px; object-fit: cover; background: #222; }
 .pl-next .nb { padding: 22px 26px; display: grid; gap: 8px; }

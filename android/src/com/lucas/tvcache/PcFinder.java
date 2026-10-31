@@ -18,11 +18,15 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * Acha o PC com a biblioteca do onVLC (porta 8780): primeiro no último endereço que funcionou,
  * depois perguntando para cada endereço da rede de casa (x.x.x.1 a 254) ao mesmo tempo.
+ *
+ * Com o PC desligado a página continua pedindo a lista; o último endereço é testado a cada pedido, mas a
+ * varredura da rede inteira só se repete com intervalo crescente (30 s, 1 min, 2 min... até 5 min).
  */
 final class PcFinder {
     static final int PORT = 8780;
     private static volatile String base;  // "http://192.168.1.69:8780"
     private static volatile boolean searching;
+    private static long lastScan, scanGap = 30_000;
 
     static String base() {
         return base;
@@ -53,7 +57,14 @@ final class PcFinder {
     private static String find(Context ctx) {
         SharedPreferences prefs = ctx.getSharedPreferences("pc", Context.MODE_PRIVATE);
         String last = prefs.getString("ip", null);
-        if (last != null && hello(last, 1500)) return url(last);
+        if (last != null && hello(last, 1500)) {
+            scanGap = 30_000;
+            return url(last);
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastScan < scanGap) return null;
+        lastScan = now;
+        scanGap = Math.min(scanGap * 2, 300_000);  // não achou desta vez: a próxima varredura espera mais
         String prefix = prefix();
         if (prefix == null) return null;
         final AtomicReference<String> hit = new AtomicReference<>();
@@ -72,6 +83,7 @@ final class PcFinder {
         }
         String ip = hit.get();
         if (ip == null) return null;
+        scanGap = 30_000;
         prefs.edit().putString("ip", ip).apply();
         return url(ip);
     }

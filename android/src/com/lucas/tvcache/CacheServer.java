@@ -38,6 +38,9 @@ import java.util.Map;
  * sem contar nos 2 GB) os blocos que o player pede ao abrir (começo, fim com o índice e os que ele pediu
  * na primeira vez), o primeiro minuto e 1 minuto a partir de onde parou. Assim o filme abre sem esperar a rede.
  *
+ * Bloco que sumiu do disco (o Android limpa o cache quando falta espaço) ou ficou cortado (queda de energia)
+ * é descartado e baixado de novo. Com menos de 1 GB livre na Mi Box, o cache encolhe em vez de crescer.
+ *
  * Rotas: /stream/<nome> (o vídeo, com Range), /status (JSON da janela), /stop,
  * /ui/<arquivo> (a biblioteca da TV: repassa para o PC e guarda uma cópia para quando ele estiver desligado).
  */
@@ -49,6 +52,7 @@ final class CacheServer {
     static final int WORKERS = 2;
     static final long KIT_LIMIT = 4L << 30;
     static final int KIT_SECONDS = 60;
+    static final long RESERVE = 1L << 30;  // espaço que fica livre na Mi Box para o resto do sistema
 
     private static CacheServer instance;
 
@@ -82,8 +86,9 @@ final class CacheServer {
         if (files != null) {
             for (File f : files) {
                 String n = f.getName();
-                if (n.endsWith(".blk")) store.put(n.substring(0, n.length() - 4), f.lastModified());
-                else if (n.endsWith(".tmp")) f.delete();
+                // vazio ou maior que um bloco: sobra de uma gravação interrompida
+                if (n.endsWith(".blk") && f.length() > 0 && f.length() <= BLOCK) store.put(n.substring(0, n.length() - 4), f.lastModified());
+                else f.delete();
             }
         }
         pinned.addAll(ctx.getSharedPreferences("kit", Context.MODE_PRIVATE).getStringSet("pinned", new HashSet<String>()));
@@ -324,9 +329,20 @@ final class CacheServer {
 
         byte[] buf = new byte[256 * 1024];
         long pos = start;
+        int bad = 0;
         while (pos <= end) {
             long idx = pos / BLOCK;
             File f = waitBlock(idx, pos);
+            long want = Math.min(total, (idx + 1) * BLOCK) - idx * BLOCK;
+            if (f.length() != want) {
+                // apagado pelo Android ou cortado: descarta e espera baixar de novo
+                if (++bad > 3) throw new IOException("bloco " + idx + " não ficou bom");
+                synchronized (lock) {
+                    drop(key + "_" + idx);
+                    lock.notifyAll();
+                }
+                continue;
+            }
             try (RandomAccessFile raf = new RandomAccessFile(f, "r")) {
                 long off = pos - idx * BLOCK;
                 long n = Math.min(raf.length() - off, end - pos + 1);
@@ -490,10 +506,18 @@ final class CacheServer {
         return n * BLOCK;
     }
 
-    /** Abre espaço para mais um bloco apagando o usado há mais tempo (de qualquer filme), fora da janela atual e dos kits. */
+    /** Pouco espaço livre na Mi Box? (a conta do sistema é barata: uma chamada) */
+    private boolean diskLow() {
+        return dir.getUsableSpace() < RESERVE + BLOCK;
+    }
+
+    /**
+     * Abre espaço para mais um bloco apagando o usado há mais tempo (de qualquer filme), fora da janela atual
+     * e dos kits: quando passa de 2 GB ou quando a Mi Box está ficando sem espaço.
+     */
     private boolean makeRoom(long p, long ahead, long behind) {
         String prefix = key + "_";
-        while (cachedBytes() + BLOCK > LIMIT) {
+        while (cachedBytes() + BLOCK > LIMIT || diskLow()) {
             String victim = null;
             long oldest = Long.MAX_VALUE;
             for (Map.Entry<String, Long> e : store.entrySet()) {
@@ -558,7 +582,7 @@ final class CacheServer {
             c.disconnect();
             throw new IOException("pedaço de outro arquivo: " + cr);
         }
-        try (InputStream in = c.getInputStream(); OutputStream out = new FileOutputStream(tmp)) {
+        try (InputStream in = c.getInputStream(); FileOutputStream out = new FileOutputStream(tmp)) {
             byte[] buf = new byte[256 * 1024];
             long got = 0;
             int r;
@@ -571,6 +595,7 @@ final class CacheServer {
                 if (Thread.currentThread().isInterrupted()) throw new IOException("cancelado");
             }
             if (got != to - from + 1) throw new IOException("bloco incompleto");
+            out.getFD().sync();  // no disco de verdade antes de valer: uma queda de energia não deixa bloco cortado
         } catch (IOException e) {
             tmp.delete();
             throw e;
@@ -662,7 +687,8 @@ final class CacheServer {
                 if (gen != warmGen) return;
                 String n = e.getKey();
                 synchronized (lock) {
-                    if (store.containsKey(n)) continue;
+                    if (store.containsKey(n) && new File(dir, n + ".blk").exists()) continue;
+                    store.remove(n);  // apagado pelo Android: baixa de novo
                 }
                 try {
                     while (true) {  // espera o filme que está tocando parar
@@ -672,6 +698,7 @@ final class CacheServer {
                         if (gen != warmGen) return;
                         Thread.sleep(3000);
                     }
+                    if (diskLow()) return;  // pouco espaço: o kit para por aqui
                     KitItem it = e.getValue();
                     long idx = Long.parseLong(n.substring(n.indexOf('_') + 1));
                     long from = idx * BLOCK, to = Math.min(it.size, from + BLOCK) - 1;

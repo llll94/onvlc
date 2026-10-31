@@ -17,7 +17,7 @@ Rede de casa (IPs, MACs, Mi Box): `…\Claude Code\Docs\Rede de casa.md`.
 Um player de vídeo próprio com o motor do VLC, em três partes:
 
 1. **onVLC do PC** (`main.py` + `ui\Overlay.qml`): janela sem borda, python-vlc por baixo e uma camada QML transparente
-   por cima (barra com capítulos, miniatura na linha do tempo, menu lateral, legendas do OpenSubtitles, Assistir na TV).
+   por cima (linha do tempo com miniatura, menu lateral, legendas do OpenSubtitles, Assistir na TV).
    A **biblioteca** (mesma tela da TV) aparece dentro dele num WebEngineView quando abre sem vídeo, ou por Ctrl+B /
    menu Mídia › Biblioteca.
 2. **Biblioteca** (`library.py`): processo separado, sem janela (`onVLC.exe --biblioteca`, ícone na bandeja), que lê a
@@ -43,8 +43,8 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
 | `tvstream.py` | **Assistir na TV** (do PC): servidor de vídeo 8765+ com Range (`send_file`, usado também pela biblioteca), adb, Wake-on-LAN, liga TV por HDMI-CEC, posição pelo `dumpsys media_session` |
 | `thumbs.py` | Miniaturas da linha do tempo (200 quadros-chave, HDR com tonemap), usadas no PC e servidas à TV |
 | `opensubs.py` | Legendas do OpenSubtitles (falta o Lucas criar conta/chave) |
-| `tvui\index.html`, `app.js`, `style.css` | Página da biblioteca (1920×1080 escalada). Telas: Início/Filmes/Séries (abas trocam ao passar; cada aba montada uma vez e reaproveitada), página do filme/série, indisponível, procurando PC. Modo PC com `?pc=1` |
-| `tvui\player.js` | Interface do player da TV (barra com capítulos e trecho guardado, miniatura ao procurar, painel áudio/legendas com rolagem, capítulos, pausado, próximo episódio, nova tentativa se travar) |
+| `tvui\index.html`, `app.js`, `style.css` | Página da biblioteca (1920×1080 escalada). Tela inicial sem abas, só 3 linhas: Continuar assistindo / Mídias (tudo, mais novo primeiro) / Vocês já assistiram (montada uma vez e reaproveitada); sem favoritos. Página do filme/série, indisponível, procurando PC. Modo PC com `?pc=1` |
+| `tvui\player.js` | Interface do player da TV (barra única com trecho guardado, miniatura ao procurar, painel áudio/legendas com rolagem, pausado, próximo episódio, nova tentativa se travar) |
 | `android\src\…\LibraryActivity.java` | Atividade da tela inicial: WebView transparente + `VideoPlayer` atrás; ponte JS `window.onvlc` (play, prepare, unprepare, toggle, seek, audio, spu, stop, warm, post) |
 | `VideoPlayer.java` | libVLC: SurfaceView vídeo + legenda, `:network-caching=400`, `:prefetch-read-size=262144`, `:prefetch-buffer-size=4096`, `:start-paused` para preparar, legendas externas como slave |
 | `CacheServer.java` | Servidor local 127.0.0.1:8090: `/stream` (blocos de 8 MB, 5 min à frente, 1 min atrás, 2 GB de vários filmes), **kit de abertura** (até 4 GB, fixado), `/ui/*` (repassa a página e a API para o PC e guarda cópia para quando o PC está desligado; imagens com cache longo), `/status` |
@@ -121,3 +121,5 @@ Wi-Fi PC→Mi Box ~250 Mbps. Miniaturas: 200 em ~35 s no 4K. Kit de abertura: 66
 - Reservar IP fixo da Mi Box no roteador.
 - Tirar os registros de depuração de teclas quando não forem mais úteis.
 - Decidir se apaga a pasta `tv-videos` do Syncthing de vez.
+- 2026-10-31: capítulos tirados do PC e da TV (o Lucas achou ruins); aviso "Mouse embaixo…" do PC tirado; favoritos tirados só da tela
+  (`/api/favorite` e `favoritos.json` continuam na biblioteca, sem uso). Falta testar e gerar o APK.

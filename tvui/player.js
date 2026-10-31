@@ -7,7 +7,7 @@
  * e botões, Voltar fecha painel → esconde a barra → volta para a biblioteca.
  */
 const PL = {
-  open: false, it: null, st: {}, ui: true, focus: "bar", btn: 0, scrub: null, panel: null, pIdx: [0, 0], chapIdx: 0,
+  open: false, it: null, st: {}, ui: true, focus: "bar", btn: 0, scrub: null, panel: null, pIdx: [0, 0],
   pausedSince: 0, next: null, nextOff: false, thumbs: { n: 0, have: [] }, thumbTimer: 0, hideTimer: 0, lastKey: 0, streak: 0,
 };
 const ICON = {
@@ -16,19 +16,12 @@ const ICON = {
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4h4"/></svg>',
   fwd: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4h-4"/></svg>',
   cc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3"/></svg>',
-  list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
   next: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 5v14l10-7z"/><rect x="16" y="5" width="3" height="14" rx="1"/></svg>',
 };
 
 // ---------- dados do vídeo aberto ----------
 const plDur = () => PL.st.length || PL.it.dur || 1;
 const plTime = () => PL.scrub !== null ? PL.scrub : (PL.st.time || 0);
-function plChapters() {
-  const c = PL.it.chapters || [];
-  return c.length > 1 ? c : [{ start: 0, title: "" }];
-}
-function plChapAt(t) { let i = 0; plChapters().forEach((c, k) => { if (t >= c.start) i = k; }); return i; }
-function plChapName(i) { const c = plChapters()[i]; return c && c.title ? c.title : `Capítulo ${i + 1}`; }
 function plNextEpisode() {
   if (PL.it.kind !== "episode") return null;
   const eps = episodesOf(PL.it.show);
@@ -46,7 +39,6 @@ function plThumb(t) {
 function plButtons() {
   const b = [{ id: "pp" }, { id: "b10", icon: "back", n: "10" }, { id: "f10", icon: "fwd", n: "10" }, { sp: true },
     { id: "tracks", icon: "cc", label: "Áudio e legendas" }];
-  if (plChapters().length > 1) b.push({ id: "chap", icon: "list", label: "Capítulos" });
   if (plNextEpisode()) b.push({ id: "nextep", icon: "next", label: "Próximo episódio" });
   return b;
 }
@@ -105,13 +97,17 @@ function closePlayer(stopEngine) {
 }
 window.onPlayerClosed = () => closePlayer(false);
 
-async function plLoadThumbs() {
-  const id = PL.it.id;
+async function plLoadThumbs(still = 0) {
+  const id = PL.it.id, before = PL.thumbs.have.length;
   try {
     const r = await fetch(`api/thumbs/${id}`, { cache: "no-store" });
     if (r.ok && PL.open && PL.it.id === id) PL.thumbs = await r.json();
   } catch (e) { /* sem miniaturas: a prévia mostra só o horário */ }
-  if (PL.open && PL.it.id === id && (!PL.thumbs.n || PL.thumbs.have.length < PL.thumbs.n)) PL.thumbTimer = setTimeout(plLoadThumbs, 4000);
+  // pergunta de novo enquanto o PC está gerando; 5 vezes seguidas sem nenhuma nova (alguma falhou), desiste
+  still = PL.thumbs.have.length > before ? 0 : still + 1;
+  if (PL.open && PL.it.id === id && (!PL.thumbs.n || PL.thumbs.have.length < PL.thumbs.n) && still < 5) {
+    PL.thumbTimer = setTimeout(() => plLoadThumbs(still), 4000);
+  }
 }
 
 // ---------- estado vindo do motor ----------
@@ -145,7 +141,6 @@ function plBuild() {
   const el = document.createElement("div");
   el.id = "player";
   const logo = t.logo ? `<img src="${img(t.logo)}" alt="">` : `<h2>${esc(t.title)}</h2>`;
-  const chs = plChapters();
   el.innerHTML = `<div class="pl-dim" id="pl-dim"></div>
     <div class="pl-paused" id="pl-paused"><div class="k">Você está assistindo</div><div class="logo">${logo}</div>
       <div class="m">${it.kind === "episode" ? `<span>${esc(epLabel(it) + " · " + it.title)}</span>` : `<span>${t.year || ""}</span><span>${esc(it.quality || "")}</span>`}</div>
@@ -156,15 +151,13 @@ function plBuild() {
       <div class="pl-top"><div><div class="logo">${logo}</div><div class="t2" id="pl-t2"></div></div>
         <div class="sp"></div><div class="pl-pill" id="pl-pill" hidden><i></i><span></span></div><div class="pl-clock" id="pl-clock"></div></div>
       <div class="pl-bottom">
-        <div class="pl-chap" id="pl-chap"></div>
         <div class="pl-barrow"><div class="pl-time" id="pl-t"></div>
-          <div class="pl-bar" id="pl-bar"><div class="pl-segs">${chs.map(() => `<div class="pl-seg"><div class="c"></div><div class="p"></div></div>`).join("")}</div>
-            <div class="pl-head" id="pl-head"></div><div class="pl-prev" id="pl-prev" hidden><img id="pl-prev-i" alt=""><div class="pt"><span id="pl-prev-c"></span><b id="pl-prev-t"></b></div></div></div>
+          <div class="pl-bar" id="pl-bar"><div class="pl-segs"><div class="pl-seg"><div class="c"></div><div class="p"></div></div></div>
+            <div class="pl-head" id="pl-head"></div><div class="pl-prev" id="pl-prev" hidden><img id="pl-prev-i" alt=""><div class="pt"><b id="pl-prev-t"></b></div></div></div>
           <div class="pl-time r" id="pl-r"></div></div>
         <div class="pl-btns" id="pl-btns"></div>
       </div></div>
     <div class="pl-panel" id="pl-panel"></div>
-    <div class="pl-chaps" id="pl-chaps"></div>
     <div id="pl-next"></div>`;
   tv.appendChild(el);
   plRenderButtons();
@@ -189,23 +182,16 @@ function plFocus() {
 
 function plUpdate() {
   if (!PL.open) return;
-  const st = PL.st, d = plDur(), t = plTime(), chs = plChapters();
-  const segs = $("pl-bar").querySelectorAll(".pl-seg");
+  const st = PL.st, d = plDur(), t = plTime();
+  const seg = $("pl-bar").querySelector(".pl-seg");
   const ranges = (st.cache && st.cache.ranges) || [];
-  const gap = 5, width = $("pl-bar").clientWidth - gap * (chs.length - 1);
-  chs.forEach((c, k) => {
-    const a = c.start, b = k < chs.length - 1 ? chs[k + 1].start : d, seg = segs[k];
-    seg.style.width = Math.max(2, (b - a) / d * width) + "px";
-    seg.querySelector(".p").style.width = Math.max(0, Math.min(1, ((st.time || 0) - a) / Math.max(.001, b - a))) * 100 + "%";
-    const cache = ranges.map(([x, y]) => { x = Math.max(x, a); y = Math.min(y, b); return y > x ? `<i style="position:absolute;top:0;bottom:0;left:${(x - a) / (b - a) * 100}%;width:${(y - x) / (b - a) * 100}%;background:rgba(255,255,255,.38)"></i>` : ""; }).join("");
-    seg.querySelector(".c").innerHTML = cache;
-  });
+  seg.querySelector(".p").style.width = Math.max(0, Math.min(1, (st.time || 0) / d)) * 100 + "%";
+  // trechos já guardados na Mi Box
+  seg.querySelector(".c").innerHTML = ranges.map(([x, y]) => { x = Math.max(x, 0); y = Math.min(y, d); return y > x ? `<i style="position:absolute;top:0;bottom:0;left:${x / d * 100}%;width:${(y - x) / d * 100}%;background:rgba(255,255,255,.38)"></i>` : ""; }).join("");
   const px = Math.max(0, Math.min(1, t / d)) * 100;
   $("pl-head").style.left = px + "%";
   $("pl-t").textContent = clock(t);
   $("pl-r").textContent = "-" + clock(Math.max(0, d - t));
-  const ci = plChapAt(t);
-  $("pl-chap").innerHTML = chs.length > 1 ? `Capítulo <b>${ci + 1}</b> de ${chs.length}${chs[ci].title ? " · " + esc(chs[ci].title) : ""}` : "";
   // procurando: miniatura e horário
   const prev = $("pl-prev");
   prev.hidden = PL.scrub === null;
@@ -215,7 +201,6 @@ function plUpdate() {
     const im = $("pl-prev-i");
     if (src && im.getAttribute("src") !== src) im.src = src;
     im.style.visibility = src ? "visible" : "hidden";
-    $("pl-prev-c").textContent = chs.length > 1 ? plChapName(plChapAt(PL.scrub)) : "";
     $("pl-prev-t").textContent = clock(PL.scrub);
   }
   // linha de cima: ano · qualidade · áudio
@@ -314,18 +299,6 @@ function plRenderPanel() {
     if (el) list.scrollTop = Math.max(0, el.offsetTop - list.clientHeight / 2 + el.offsetHeight / 2);
   });
 }
-function plRenderChaps() {
-  const p = $("pl-chaps");
-  p.classList.toggle("on", PL.panel === "chap");
-  if (PL.panel !== "chap") return;
-  const chs = plChapters(), now = plChapAt(PL.st.time || 0);
-  const shift = Math.max(0, PL.chapIdx - 2) * 386;
-  p.innerHTML = `<h3>Capítulos</h3><div class="pl-cstrip" style="transform:translateX(${-shift}px)">${chs.map((c, k) => {
-    const src = plThumb(c.start + 20);
-    return `<div class="pl-cc${PL.chapIdx === k ? " focus" : ""}${now === k ? " now" : ""}"><div class="im">${src ? `<img src="${src}" alt="">` : ""}</div>
-      <div class="ct"><b>${esc(plChapName(k))}</b><span>${clock(c.start)}</span></div></div>`;
-  }).join("")}</div>`;
-}
 function plRenderNext() {
   const box = $("pl-next");
   if (PL.next === null) { box.innerHTML = ""; return; }
@@ -393,14 +366,6 @@ function plKey(k) {
     plRenderPanel();
     return;
   }
-  if (PL.panel === "chap") {
-    if (dx) PL.chapIdx = Math.max(0, Math.min(plChapters().length - 1, PL.chapIdx + dx));
-    if (ok) { plSeek(plChapters()[PL.chapIdx].start + 0.5); PL.panel = null; PL.focus = "bar"; plPoke(); }
-    plRenderChaps();
-    plFocus();
-    plUpdate();
-    return;
-  }
   if (!PL.ui) {  // barra escondida: atalhos diretos
     if (dx) { plSeek((PL.st.time || 0) + dx * plStep()); plFlash(dx); return; }
     if (ok) { plToggle(); plPoke(); plUpdate(); return; }
@@ -429,7 +394,6 @@ function plKey(k) {
         PL.pIdx = [0, Math.max(0, plAudioList().findIndex(a => a.id === PL.st.audioId))];
         plRenderPanel();
       }
-      if (b === "chap") { PL.panel = "chap"; PL.chapIdx = plChapAt(PL.st.time || 0); plRenderChaps(); }
       if (b === "nextep") return openPlayer(plNextEpisode(), 0);
     }
   }
@@ -447,7 +411,7 @@ function plLog(what) {
 function plBack() {
   plLog("voltar");
   if (PL.next !== null) { PL.nextOff = true; PL.next = null; plRenderNext(); return true; }
-  if (PL.panel) { PL.panel = null; plRenderPanel(); plRenderChaps(); plPoke(); plFocus(); plUpdate(); return true; }
+  if (PL.panel) { PL.panel = null; plRenderPanel(); plPoke(); plFocus(); plUpdate(); return true; }
   if (PL.scrub !== null) { PL.scrub = null; plUpdate(); return true; }
   if (PL.ui && PL.st.state === "playing") { PL.ui = false; plUpdate(); return true; }
   closePlayer(true);  // a posição vai para o PC pelo app

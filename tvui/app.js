@@ -1,6 +1,6 @@
 "use strict";
 /* Biblioteca do onVLC na TV.
- * Navegação pelo controle: as setas andam entre "zonas" (abas, linhas de capas, botões) e o OK abre.
+ * Navegação pelo controle: as setas andam entre "zonas" (linhas de capas, botões) e o OK abre.
  * Os dados vêm de api/library (o PC, ou a cópia guardada pelo app da Mi Box quando o PC está desligado).
  * Tocar: window.onvlc.play(...) é a ponte do app Android; no navegador do PC só mostra um aviso.
  */
@@ -10,10 +10,9 @@ const PC = /[?&]pc\b/.test(location.search);
 let dragging = false;
 function host(cmd, data) { location.href = "/pc/" + cmd + (data ? "?d=" + encodeURIComponent(JSON.stringify(data)) : ""); }
 const tv = $("tv"), view = $("view");
-const TABS = ["Início", "Filmes", "Séries"];
 
 let LIB = null, RAW = "", OFFLINE = false, byId = {};
-let screen = { name: "home", tab: 0 };
+let screen = { name: "home" };
 const stack = [];
 let zones = [], zi = 0, cols = [], onFocus = () => {};
 let toastTimer = 0, loadTimer = 0;
@@ -66,14 +65,12 @@ function index() {
     byId[s.id] = s;
     s.seasons.forEach(se => se.episodes.forEach(e => { e.kind = "episode"; e.show = s; byId[e.id] = e; }));
   });
-  // o que saiu da pasta continua nos assistidos e nos favoritos, como item "indisponível" (com os dados guardados)
+  // o que saiu da pasta continua nos assistidos, como item "indisponível" (com os dados guardados)
   const gone = (id, snap) => byId[id] || byId["h:" + id] || (byId["h:" + id] = {
     kind: "gone", id: "h:" + id, realId: id, title: snap.title, year: snap.year, runtime: snap.runtime || 0,
     genres: snap.genres || [], vote: snap.vote || 0, overview: snap.overview || "", poster: snap.poster || "",
     backdrop: snap.backdrop || "", logo: snap.logo || "", frame: snap.frame || "", quality: snap.quality || "",
     ep: snap.season ? `T${snap.season}:E${snap.episode} · ${snap.epTitle || ""}` : "", audio: [], subs: [] });
-  const favIds = new Set((LIB.favorites || []).map(f => f.id));
-  Object.values(byId).forEach(it => { it.fav = favIds.has(it.id); });
   const seen = new Set();
   LIB.watchedList = [];
   (LIB.history || []).forEach(h => {
@@ -83,7 +80,6 @@ function index() {
     if (it.kind === "gone") it.watched = it.watched || h.date;
     LIB.watchedList.push({ it, when: h.date, ep: h.kind === "episode" ? `T${h.season}:E${h.episode}` : "" });
   });
-  LIB.favList = (LIB.favorites || []).map(f => { const it = gone(f.id, f); it.fav = true; return it; });
 }
 const nameOf = it => it.kind === "episode" ? it.show.title : it.title;
 const epLabel = e => `T${e.season}:E${e.episode}`;
@@ -94,15 +90,13 @@ function backdropOf(it) {
 function episodesOf(show) { return show.seasons.flatMap(se => se.episodes); }
 
 // ---------- fundo (troca suave entre duas camadas) ----------
-let bgCur = "", bgFlip = false, bgInstant = false;
+let bgCur = "", bgFlip = false;
 function setBg(it) {
   const [src, frame] = it ? backdropOf(it) : ["", false];
   if (src === bgCur) return;
   bgCur = src;
   bgFlip = !bgFlip;
   const on = $(bgFlip ? "bg-a" : "bg-b"), off = $(bgFlip ? "bg-b" : "bg-a");
-  // trocando de aba: sem a transição (ela deixava ver o fundo da aba anterior)
-  [on, off].forEach(el => { el.style.transition = bgInstant ? "none" : ""; });
   on.style.backgroundImage = src ? `url("${img(src)}")` : "none";
   on.classList.toggle("frame", frame);
   on.classList.add("on");
@@ -168,7 +162,7 @@ function card(it, wide, zone, when) {
 function setZones(list, keepKey) {
   zones = list.filter(z => z.length);
   cols = zones.map(() => 0);
-  zi = Math.min(zi, zones.length - 1);
+  zi = Math.max(0, Math.min(zi, zones.length - 1));
   if (keepKey) {
     zones.forEach((z, a) => z.forEach((el, b) => { if (el.dataset.k === keepKey) { zi = a; cols[a] = b; } }));
   }
@@ -192,20 +186,6 @@ function move(dx, dy) {
   }
   if (dx) cols[zi] = Math.max(0, Math.min(zones[zi].length - 1, cols[zi] + dx));
   focus();
-  const el = current();
-  clearTimeout(tabTimer);
-  if (dx && el && el.dataset.tab !== undefined && screen.name === "home") {
-    tabTimer = setTimeout(() => switchTab(+el.dataset.tab), 220);  // passando rápido por uma aba, ela não monta
-  }
-}
-let tabTimer = 0;
-function switchTab(t) {
-  if (screen.name !== "home" || screen.tab === t) return;
-  plUnprepare();
-  screen.tab = t;
-  stack.length = 0;
-  zi = 0;
-  renderHome(`nav:${t}`, true);
 }
 function scrollCards(el) {
   const strip = el.parentElement;
@@ -215,81 +195,56 @@ function scrollCards(el) {
 }
 
 // ---------- telas ----------
+// três linhas: o que parou no meio, tudo o que tem na pasta (o mais novo primeiro) e o que já viram
 function homeRows() {
   const rows = [];
   const cont = LIB.continue.map(id => byId[id]).filter(Boolean);
   if (cont.length) rows.push({ title: "Continuar assistindo", items: cont, wide: true });
-  if (LIB.favList.length) rows.push({ title: "Favoritos", items: LIB.favList });
-  const all = [...LIB.movies, ...LIB.shows];
-  if (all.length > 1) rows.push({ title: "Adicionados recentemente", items: [...all].sort((a, b) => b.added - a.added).slice(0, 20) });
-  if (LIB.movies.length) rows.push({ title: "Filmes", items: [...LIB.movies].sort(byTitle) });
-  if (LIB.shows.length) rows.push({ title: "Séries", items: [...LIB.shows].sort(byTitle) });
+  const all = [...LIB.movies, ...LIB.shows].sort((a, b) => b.added - a.added || byTitle(a, b));
+  if (all.length) rows.push({ title: "Mídias", items: all });
   if (LIB.watchedList.length) rows.push({ title: "Vocês já assistiram", items: LIB.watchedList.map(w => w.it),
     when: LIB.watchedList.map(w => [w.ep, dateLabel(w.when)].filter(Boolean).join(" · ")) });
-  const genres = {};
-  all.forEach(it => (it.genres || []).forEach(g => (genres[g] = genres[g] || []).push(it)));
-  Object.entries(genres).filter(([, v]) => v.length > 1).sort((a, b) => b[1].length - a[1].length).slice(0, 4)
-    .forEach(([g, v]) => rows.push({ title: g, items: v }));
-  return rows;
-}
-function gridRows(items, label) {
-  const rows = [];
-  for (let i = 0; i < items.length; i += 7) rows.push({ title: i ? "" : label, items: items.slice(i, i + 7) });
   return rows;
 }
 
-function renderNav(active) {
-  $("nav").innerHTML = TABS.map((t, i) => `<div class="tab${i === active ? " cur" : ""}" data-k="nav:${i}" data-tab="${i}">${t}</div>`).join("");
-}
-
-// cada aba é montada uma vez (até a lista mudar) e só trocada de lugar: as capas não somem e voltam
-let tabCache = { raw: null, els: [] };
-function homeEl(tab) {
-  if (tabCache.raw !== RAW) tabCache = { raw: RAW, els: [] };
-  if (tabCache.els[tab]) return tabCache.els[tab];
-  let rows;
-  if (tab === 1) rows = LIB.movies.length ? gridRows([...LIB.movies].sort(byTitle), `Filmes · ${LIB.movies.length}`) : [];
-  else if (tab === 2) rows = LIB.shows.length ? gridRows([...LIB.shows].sort(byTitle), `Séries · ${LIB.shows.length}`) : [];
-  else rows = homeRows();
+// a tela inicial é montada uma vez (até a lista mudar) e reaproveitada: as capas não somem e voltam
+let homeCache = { raw: null, el: null };
+function homeEl() {
+  if (homeCache.raw === RAW) return homeCache.el;
+  const rows = homeRows();
   const el = document.createElement("div");
   el.className = "home";
   el.innerHTML = `<div class="hero"></div>
     <div class="rows"><div class="rows-in">${rows.map((r, ri) => `<section class="row">
       <h3>${esc(r.title)}</h3><div class="cards">${r.items.map((it, k) => card(it, r.wide, "r" + ri, r.when && r.when[k])).join("")}</div></section>`).join("")}
-      ${rows.length ? "" : `<section class="row"><h3>${tab === 1 ? "Nenhum filme ainda" : "Nenhuma série ainda"}</h3></section>`}
     </div></div>`;
-  el.firstItem = rows[0] && rows[0].items[0];
-  return (tabCache.els[tab] = el);
+  homeCache = { raw: RAW, el };
+  return el;
 }
 
-function renderHome(keepKey, instant) {
-  screen = { name: "home", tab: screen.tab || 0 };
-  renderNav(screen.tab);
+function renderHome(keepKey) {
+  screen = { name: "home" };
   const nothing = !LIB.movies.length && !LIB.shows.length;
   if (nothing) {
     setBg(null);
     view.innerHTML = `<div class="empty"><h2>A biblioteca está vazia</h2>
       <p>Coloque filmes e séries na pasta <b>Vídeos › onVLC</b> do PC (${esc(LIB.folder)}).</p>
       <p>Eles aparecem aqui sozinhos em menos de um minuto. Séries são reconhecidas pelo "S01E02" no nome.</p></div>`;
-    setZones([[...$("nav").children]], keepKey || "nav:0");
+    setZones([]);
     onFocus = () => {};
     return;
   }
-  const home = homeEl(screen.tab);
+  const home = homeEl();
   view.replaceChildren(home);
-  const zs = [[...$("nav").children], ...[...home.querySelectorAll(".row .cards")].map(c => [...c.children])];
+  const zs = [...home.querySelectorAll(".row .cards")].map(c => [...c.children]);
   onFocus = el => {
-    const rowsIn = home.querySelector(".rows-in");
-    if (!el || el.classList.contains("tab")) { rowsIn.style.transform = "translateY(0)"; return; }
-    rowsIn.style.transform = `translateY(${-el.closest(".row").offsetTop}px)`;
+    if (!el) return;
+    home.querySelector(".rows-in").style.transform = `translateY(${-el.closest(".row").offsetTop}px)`;
     scrollCards(el);
     hero(byId[el.dataset.id]);
   };
-  if (!keepKey) zi = 1;
-  bgInstant = !!instant;
+  if (!keepKey) zi = 0;
   setZones(zs, keepKey);
-  if (zi === 0) hero(home.firstItem);
-  bgInstant = false;
 }
 
 function hero(it) {
@@ -312,11 +267,10 @@ function renderMovie(it, keepKey) {
       { label: "Do começo", act: () => play(it, true) });
     else btns.push({ label: it.watched ? "Assistir de novo" : "Assistir", play: true, act: () => play(it, true) });
   }
-  btns.push(favButton(it));
   view.innerHTML = `<div class="detail"><div class="body">
       <div class="logo">${titleBlock(it)}</div>${metaLine(it)}${synopsis(it.overview)}
       ${it.broken ? `<div class="note">O PC não consegue abrir este arquivo. Ele pode estar incompleto ou corrompido.</div>` : offlineNote()}
-      <div class="btns">${btns.map((b, i) => `<div class="btn" data-k="b:${i}" data-b="${i}">${b.play ? '<span class="tri"></span>' : ""}${esc(b.label)}</div>`).join("")}</div>
+      ${btnsHtml(btns)}
       <dl class="facts">
         <dt>Áudio</dt><dd>${esc([...new Set(it.audio)].join(" · ") || "—")}</dd>
         <dt>Legendas</dt><dd>${esc(it.subs.join(" · ") || "nenhuma")}</dd>
@@ -340,12 +294,11 @@ function renderShow(show, season, keepKey) {
   const btns = [];
   if (started) btns.push({ label: `Continuar ${epLabel(started)}`, play: true, act: () => play(started, false) });
   else if (first) btns.push({ label: `Assistir ${epLabel(first)}`, play: true, act: () => play(first, true) });
-  btns.push(favButton(show));
   setBg(show);
   view.innerHTML = `<div class="detail"><div class="body" style="top:150px">
       <div class="logo" style="height:170px">${titleBlock(show)}</div>${metaLine(show)}
       <div id="ep-text">${synopsis(show.overview)}</div>${offlineNote()}
-      <div class="btns">${btns.map((b, i) => `<div class="btn" data-k="b:${i}">${b.play ? '<span class="tri"></span>' : ""}${esc(b.label)}</div>`).join("")}</div>
+      ${btnsHtml(btns)}
       ${seasons.length > 1 ? `<div class="seasons">${seasons.map((se, i) => `<div class="btn${i === si ? " cur" : ""}" data-k="s:${i}" data-season="${i}">Temporada ${se.n}</div>`).join("")}</div>` : ""}
     </div>
     <div class="eps"><section class="row"><h3>${seasons.length > 1 ? `Temporada ${seasons[si].n}` : "Episódios"}</h3>
@@ -377,7 +330,6 @@ function episodeCard(e) {
 }
 
 function renderSearching() {
-  renderNav(-1);
   setBg(null);
   view.innerHTML = `<div class="empty"><div class="spinner"></div><h2>Procurando o PC</h2>
     <p>Os filmes ficam no computador. Abra o <b>onVLC</b> no PC e a TV acha sozinha.</p></div>`;
@@ -397,12 +349,6 @@ function render(keepKey) {
 function activate() {
   const el = current();
   if (!el) return;
-  if (el.dataset.tab !== undefined) {
-    clearTimeout(tabTimer);
-    if (screen.tab !== +el.dataset.tab) return switchTab(+el.dataset.tab);
-    if (zones.length > 1) { zi = 1; cols[1] = 0; focus(); }  // OK na aba já aberta: desce para as capas
-    return;
-  }
   if (el.dataset.season !== undefined) {
     renderShow(byId[screen.id], +el.dataset.season, el.dataset.k);
     return;
@@ -420,32 +366,15 @@ function activate() {
   else renderShow(it, 0);
 }
 
-// ---------- favoritos ----------
-function favButton(it) {
-  return { label: it.fav ? "♥ Nos favoritos" : "♡ Favoritar", act: () => toggleFav(it) };
-}
-function apiPost(path, body) {
-  const json = JSON.stringify(body);
-  if (window.onvlc && window.onvlc.post) return window.onvlc.post(path, json);  // o app manda para o PC
-  return fetch(path.slice(1), { method: "POST", headers: { "Content-Type": "application/json" }, body: json });
-}
-function toggleFav(it) {
-  const id = it.realId || it.id, on = !it.fav;
-  const pick = ["kind", "title", "year", "runtime", "genres", "vote", "overview", "poster", "backdrop", "logo", "frame", "quality"];
-  const item = {};
-  pick.forEach(k => { if (it[k] !== undefined) item[k] = it[k]; });
-  apiPost("/api/favorite", { id, on, item });
-  it.fav = on;
-  toast(on ? "Adicionado aos favoritos" : "Tirado dos favoritos", 1800);
-  render(current() && current().dataset.k);
-  setTimeout(load, 600);
+// botões da página do filme/série; o de tocar leva o mesmo ícone do player
+function btnsHtml(btns) {
+  return `<div class="btns">${btns.map((b, i) => `<div class="btn" data-k="b:${i}">${b.play ? ICON.play : ""}${esc(b.label)}</div>`).join("")}</div>`;
 }
 
 // ---------- vídeo que saiu da pasta ----------
 function renderGone(it, keepKey) {
   screen = { name: "gone", id: it.id };
   setBg(it);
-  const btns = [favButton(it)];
   const seen = it.watched ? `<span class="seen-t">✓ Assistido ${["hoje", "ontem"].includes(dateLabel(it.watched)) ? dateLabel(it.watched) : "em " + dateLabel(it.watched)}</span>` : "";
   view.innerHTML = `<div class="detail"><div class="body">
       <div class="logo">${titleBlock(it)}</div>
@@ -454,12 +383,11 @@ function renderGone(it, keepKey) {
         .filter(Boolean).join("")}</div>
       ${synopsis(it.overview)}
       <div class="note gone"><span><b>Indisponível.</b> Este arquivo não está mais na pasta onVLC do PC. Coloque ele de volta lá para assistir.</span></div>
-      <div class="btns">${btns.map((b, i) => `<div class="btn" data-k="b:${i}">${esc(b.label)}</div>`).join("")}</div>
     </div></div>`;
-  view.actions = btns;
+  view.actions = [];
   onFocus = () => {};
   zi = 0;
-  setZones([[...view.querySelectorAll(".btn")]], keepKey);
+  setZones([], keepKey);
 }
 
 // ---------- kit de abertura ----------
@@ -500,15 +428,9 @@ function back() {
     render(prev.key);
     return true;
   }
-  if (screen.name === "home" && screen.tab !== 0) {
-    screen.tab = 0;
+  if (screen.name === "home" && (zi > 0 || cols[0] > 0)) {  // volta para o começo antes de sair
     zi = 0;
-    renderHome("nav:0");
-    return true;
-  }
-  if (screen.name === "home" && zi > 1) {  // volta para o começo antes de sair
-    zi = 1;
-    cols[1] = 0;
+    cols[0] = 0;
     focus();
     return true;
   }
@@ -517,6 +439,29 @@ function back() {
 }
 window.tvBack = back;
 window.tvRefresh = () => load();
+
+// "Assistir na TV" do PC: o app passa {id, pos (s)}; toca assim que o vídeo estiver na lista
+// (um vídeo recém-posto na pasta leva uns segundos para a biblioteca ler)
+let pendingPlay = null;
+window.tvPlayId = req => {
+  pendingPlay = { id: req.id, pos: req.pos || 0, at: Date.now() };
+  if (!playPending()) load();
+  return true;
+};
+function playPending() {
+  if (!pendingPlay || !LIB) return false;
+  if (Date.now() - pendingPlay.at > 180000) { pendingPlay = null; return false; }
+  const it = byId[pendingPlay.id];
+  if (!it || OFFLINE) return false;
+  const pos = pendingPlay.pos;
+  pendingPlay = null;
+  if (PL.open) closePlayer(true);
+  stack.length = 0;
+  screen = { name: "home" };
+  it.pos = pos;
+  play(it, pos === 0);
+  return true;
+}
 
 document.addEventListener("keydown", e => {
   const k = e.key;
@@ -566,7 +511,7 @@ tv.addEventListener("click", e => {
   const same = el === current() || PC;  // no PC um clique já abre (o foco vem com o mouse)
   zones.forEach((z, a) => z.forEach((x, b) => { if (x === el) { zi = a; cols[a] = b; } }));
   focus();
-  if (same || el.classList.contains("btn") || el.classList.contains("tab")) activate();
+  if (same || el.classList.contains("btn")) activate();
 });
 
 // ---------- carregar ----------
@@ -601,7 +546,8 @@ async function load() {
   const busy = $("busy");
   busy.hidden = !(LIB && LIB.busy && !OFFLINE);
   if (!busy.hidden) busy.textContent = `Lendo ${plural(LIB.busy, "vídeo novo", "vídeos novos")}`;
-  loadTimer = setTimeout(load, OFFLINE || !LIB || LIB.busy ? 5000 : 30000);
+  playPending();
+  loadTimer = setTimeout(load, OFFLINE || !LIB || LIB.busy || pendingPlay ? 5000 : 30000);
 }
 
 function tick() {
