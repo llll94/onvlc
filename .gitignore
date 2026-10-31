@@ -5,3 +5,4 @@ dist/
 *.log
 *.keystore
 server/*.exe
+server/*.exe~
