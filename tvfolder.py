@@ -15,6 +15,7 @@ import os
 import shutil
 import threading
 import time
+import urllib.error
 import urllib.request
 from ctypes import wintypes
 from pathlib import Path
@@ -70,6 +71,7 @@ class LibraryFolder:
         self.jobs = []  # cópias em andamento: {"name", "src", "p"}
         self.lock = threading.Lock()
         self._refreshing = False
+        self._lib, self._etag = None, ""
 
     def files(self):
         import library
@@ -85,8 +87,16 @@ class LibraryFolder:
         # o que a biblioteca já sabe de cada arquivo (nome do filme, qualidade, problema)
         known, running, summary = {}, False, ""
         try:
-            with urllib.request.urlopen("http://127.0.0.1:8780/api/library", timeout=2) as r:
-                lib = json.load(r)
+            # com o painel aberto isto roda a cada 3 s: sem mudança, a biblioteca só responde "304, igual"
+            req = urllib.request.Request("http://127.0.0.1:8780/api/library",
+                                         headers={"If-None-Match": self._etag} if self._etag else {})
+            try:
+                with urllib.request.urlopen(req, timeout=2) as r:
+                    self._lib, self._etag = json.load(r), r.headers.get("ETag") or ""
+            except urllib.error.HTTPError as e:
+                if e.code != 304 or self._lib is None:
+                    raise
+            lib = self._lib
             running = True
             for m in lib["movies"]:
                 known[m["file"].lower()] = {"title": f'{m["title"]} ({m["year"]})' if m.get("year") else m["title"],

@@ -1,5 +1,4 @@
 ﻿import QtQuick
-import QtWebEngine
 
 // Camada transparente por cima do vídeo: barra de baixo, faixa de cima, menu, quadros e avisos.
 Item {
@@ -7,7 +6,7 @@ Item {
     focus: true
 
     property var s: player.state
-    // a biblioteca (a mesma tela da TV) por cima do player: abre sozinha quando não há vídeo
+    // a biblioteca (o mesmo desenho da tela da TV) por cima do player: abre sozinha quando não há vídeo
     property bool libraryOpen: !player.state.hasMedia
 
     // cores e fontes
@@ -150,6 +149,8 @@ Item {
         if (kind === "audio") player.setAudioTrack(nxt); else player.setSubTrack(nxt)
     }
 
+    // a lista do menu aberto, montada uma vez a cada mudança (e não uma vez por item)
+    readonly property var menuList: menuOpen ? menuItems(cat) : []
     function menuItems(c) {
         var found = (s.found || []).length
         switch (c) {
@@ -264,6 +265,7 @@ Item {
             return
         }
         e.accepted = true
+        if (libraryOpen && !menuOpen && popName === "" && libLoader.item && libLoader.item.handleKey(e)) return
         if (e.key === Qt.Key_Tab) { menuOpen = !menuOpen; if (menuOpen) showTop = true; return }
         if (e.key === Qt.Key_Escape) {
             if (menuOpen) menuOpen = false
@@ -297,18 +299,6 @@ Item {
         target: player
         function onToast(m) { root.showToast(m) }
         function onLibraryShow(on) { root.libraryOpen = on }
-    }
-
-    // pedidos da página da biblioteca: ela navega para /pc/<comando> e o onVLC intercepta
-    function libraryCmd(cmd) {
-        if (cmd.indexOf("play?d=") === 0) {
-            player.libraryPlay(decodeURIComponent(cmd.substring(7)))
-            libraryOpen = false
-        } else if (cmd === "move") {
-            player.startMove()  // clicou, segurou e arrastou na biblioteca: move a janela
-        } else if (cmd === "close" && s.hasMedia) {
-            libraryOpen = false
-        }
     }
 
     // ---------- componentes ----------
@@ -572,26 +562,22 @@ Item {
     }
 
     // ---------- biblioteca ----------
-    Rectangle {
+    // só existe enquanto está aberta: fechada, não ocupa memória nem fica pedindo a lista
+    Loader {
+        id: libLoader
         anchors.fill: parent
-        visible: root.libraryOpen
-        color: "#0b0b0c"
-        MouseArea { anchors.fill: parent; hoverEnabled: true }  // não deixa o clique chegar no player embaixo
-        WebEngineView {
-            id: libView
-            anchors.fill: parent
-            url: "http://127.0.0.1:8780/tv/?pc=1"
-            backgroundColor: "#0b0b0c"
-            onNavigationRequested: function (request) {
-                var u = request.url.toString(), i = u.indexOf("/pc/")
-                if (i >= 0) { request.reject(); root.libraryCmd(u.substring(i + 4)) }
-            }
-            // a biblioteca ainda subindo junto com o onVLC: tenta de novo
-            onLoadingChanged: function (info) { if (info.status === WebEngineView.LoadFailedStatus) libRetry.start() }
-            Timer { id: libRetry; interval: 1500; onTriggered: libView.reload() }
+        active: root.libraryOpen
+        source: "Library.qml"
+        onLoaded: {
+            item.font = root.uiFont
+            item.canClose = Qt.binding(function () { return !!root.s.hasMedia })
         }
-        onVisibleChanged: if (visible) { libView.forceActiveFocus(); libView.runJavaScript("window.tvRefresh && tvRefresh()") }
-                          else root.forceActiveFocus()
+        onActiveChanged: if (!active) root.forceActiveFocus()
+    }
+    Connections {
+        target: libLoader.item
+        function onPlay(path, pos) { player.libraryOpenVideo(path, pos); root.libraryOpen = false }
+        function onClose() { root.libraryOpen = false }
     }
 
     Ripple { id: ripL; label: "−10 s"; x: parent.width * 0.18; anchors.verticalCenter: parent.verticalCenter }
@@ -698,13 +684,13 @@ Item {
                         Rectangle {
                             height: parent.height
                             color: root.orange
-                            width: parent.width * (root.dur > 0 ? Math.max(0, Math.min(1, (s.pos || 0) / root.dur)) : 0)
+                            width: parent.width * (root.dur > 0 ? Math.max(0, Math.min(1, player.pos / root.dur)) : 0)
                         }
                     }
                     Rectangle {
                         width: 16; height: 16; radius: 8
                         anchors.verticalCenter: parent.verticalCenter
-                        x: (root.dur > 0 ? (s.pos || 0) / root.dur : 0) * tl.width - 8
+                        x: (root.dur > 0 ? player.pos / root.dur : 0) * tl.width - 8
                         color: root.orange
                         border.color: Qt.rgba(1, 0.54, 0.12, 0.3); border.width: 0
                         scale: tl.hovering ? 1 : 0.75
@@ -760,7 +746,7 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     width: 72
                     horizontalAlignment: Text.AlignRight
-                    text: "-" + root.fmt(root.dur - (s.pos || 0))
+                    text: "-" + root.fmt(root.dur - player.pos)
                     color: Qt.rgba(1, 1, 1, 0.85)
                     font.family: root.monoFont; font.pixelSize: 14
                 }
@@ -1445,11 +1431,11 @@ Item {
                 }
 
                 Repeater {
-                    model: root.menuItems(root.cat).length
+                    model: root.menuList.length
                     delegate: Rectangle {
                         id: mi
                         required property int index
-                        readonly property var it: root.menuItems(root.cat)[index] || ({})
+                        readonly property var it: root.menuList[index] || ({})
                         readonly property bool clickable: !!it.act && !it.soon
                         width: subCol.width
                         height: it.note ? noteText.implicitHeight + 16 : (it.head ? 30 : 40)

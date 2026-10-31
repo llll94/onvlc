@@ -85,6 +85,41 @@ def build_library():
     return ROOT / "server" / "onvlc-biblioteca.exe"
 
 
+# o que a interface usa do Qt: o resto (3D, gráficos, mapas, multimídia, PDF, navegador…) entra junto no pacote
+# porque o PyInstaller copia todos os módulos de tela do Qt; depois do build ele sai
+QT_KEEP = {"Qt6Core", "Qt6Gui", "Qt6Widgets", "Qt6Network", "Qt6OpenGL", "Qt6Qml", "Qt6QmlCore", "Qt6QmlMeta",
+           "Qt6QmlModels", "Qt6QmlWorkerScript", "Qt6QmlNetwork", "Qt6Quick", "Qt6QuickShapes", "Qt6Svg", "Qt6Concurrent"}
+QML_KEEP = {"QtQml", "QtQuick"}
+QTQUICK_KEEP = {"Shapes", "Window"}  # import QtQuick + QtQuick.Shapes (ícones)
+PLUGINS_DROP = {"qmltooling", "networkinformation", "generic", "platforminputcontexts"}
+
+
+def trim(internal):
+    """Tira do pacote as partes do Qt que o onVLC não usa (de ~438 MB para ~100 MB)."""
+    qt = internal / "PySide6"
+    before = sum(f.stat().st_size for f in qt.rglob("*") if f.is_file())
+    for f in qt.glob("Qt6*.dll"):
+        if f.stem not in QT_KEEP:
+            f.unlink()
+    for name in ("opengl32sw.dll",):  # OpenGL por software: só para PC sem placa de vídeo
+        (qt / name).unlink(missing_ok=True)
+    shutil.rmtree(qt / "resources", ignore_errors=True)  # dados do navegador embutido (WebEngine)
+    for d in (qt / "qml").iterdir():
+        if d.is_dir() and d.name not in QML_KEEP:
+            shutil.rmtree(d)
+    for d in (qt / "qml" / "QtQuick").iterdir():
+        if d.is_dir() and d.name not in QTQUICK_KEEP:
+            shutil.rmtree(d)
+    for d in (qt / "plugins").iterdir():
+        if d.name in PLUGINS_DROP:
+            shutil.rmtree(d)
+    for f in (qt / "translations").glob("*"):
+        if f.is_dir() or "pt_BR" not in f.name:
+            shutil.rmtree(f) if f.is_dir() else f.unlink()
+    after = sum(f.stat().st_size for f in qt.rglob("*") if f.is_file())
+    print(f"Qt: {before / 2**20:.0f} MB -> {after / 2**20:.0f} MB")
+
+
 def main():
     subprocess.run([sys.executable, str(ROOT / "tools" / "make_icon.py")], check=True)
     lib_exe = build_library()
@@ -94,10 +129,13 @@ def main():
         "--icon", str(ROOT / "ui" / "icon.ico"),
         "--add-data", f"{ROOT / 'ui'}{os.pathsep}ui",
         "--add-data", f"{ROOT / 'tvui'}{os.pathsep}tvui",
+        "--exclude-module", "PySide6.QtWebEngineCore", "--exclude-module", "PySide6.QtWebEngineQuick",
+        "--exclude-module", "setuptools",
         "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build"), "--specpath", str(ROOT / "build"),
     ], check=True)
 
     exe = ROOT / "dist" / NAME / f"{NAME}.exe"
+    trim(exe.parent / "_internal")
     shutil.copy2(lib_exe, exe.with_name(lib_exe.name))
     for folder in (DESKTOP, START_MENU):
         lnk = folder / f"{NAME}.lnk"

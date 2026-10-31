@@ -93,7 +93,9 @@ class VideoWindow(QWidget):
 
 class Player(QObject):
     stateChanged = Signal()
+    posChanged = Signal()  # só a posição (várias vezes por segundo, sem mandar o estado inteiro para a tela)
     toast = Signal(str)
+    _vlcEvent = Signal(str)  # avisos do motor do VLC, que chegam de outra thread
     _webResult = Signal(object)  # resposta do OpenSubtitles, vinda de outra thread
     _tvState = Signal(object)  # estado da pasta onVLC, vindo de outra thread
     _watchState = Signal(object)  # estado do Assistir na TV, vindo de outra thread
@@ -152,9 +154,23 @@ class Player(QObject):
                 print(err.toString(), file=sys.stderr)
             sys.exit(1)
 
+        # a posição é lida só com o vídeo tocando e a janela à vista; o resto chega pelos avisos do VLC
         self.timer = QTimer(self)
+        self.timer.setInterval(250)
         self.timer.timeout.connect(self.tick)
-        self.timer.start(200)
+        self._vlcEvent.connect(self._on_vlc)
+        em = self.mp.event_manager()
+        self._vlc_handlers = []
+        for name in ("MediaPlayerPlaying", "MediaPlayerPaused", "MediaPlayerStopped", "MediaPlayerEndReached",
+                     "MediaPlayerLengthChanged", "MediaPlayerESAdded", "MediaPlayerESDeleted", "MediaPlayerESSelected",
+                     "MediaPlayerEncounteredError"):
+            cb = (lambda n: lambda e: self._vlcEvent.emit(n))(name)
+            self._vlc_handlers.append(cb)  # o python-vlc não guarda a função: sem isso ela some
+            em.event_attach(getattr(vlc.EventType, name), cb)
+        self._tracks_soon = QTimer(self)
+        self._tracks_soon.setSingleShot(True)
+        self._tracks_soon.setInterval(300)
+        self._tracks_soon.timeout.connect(self._tracks_changed)
 
     # ---------- janelas ----------
     def show(self):
@@ -179,7 +195,10 @@ class Player(QObject):
     def on_window_state(self):
         if self.win.isMinimized():
             self.overlay.hide()
+            self.timer.stop()
         else:
+            if self.st.get("playing"):
+                self.timer.start()
             self.sync_overlay()
             self.overlay.show()
             self.overlay.requestActivate()
@@ -213,36 +232,73 @@ class Player(QObject):
 
     state = Property("QVariantMap", _get_state, notify=stateChanged)
 
-    def tick(self):
-        mp = self.mp
-        self.ticks += 1
-        if self.path:
-            if mp.get_state() == vlc.State.Ended:
-                self._on_end()
-                return
-            self.st["playing"] = mp.is_playing() == 1
-            self.st["pos"] = max(0, mp.get_time()) / 1000
-            dur = mp.get_length() / 1000
-            if dur > 0:
-                self.st["dur"] = dur
-                if self.thumbs_for != self.path:
-                    self.thumbs_for = self.path
-                    self.thumbs.start(self.path, dur)
-                if self.pending_resume is not None:
-                    at = self.pending_resume
-                    self.pending_resume = None
-                    if 30 < at < dur - 60:
-                        mp.set_time(int(at * 1000))
-                        self.toast.emit("Continuando de " + self._fmt(at))
-            cur = mp.audio_get_volume()
-            want = 0 if self.muted else self.vol
-            if cur >= 0 and cur != want:
-                mp.audio_set_volume(want)
-            if self.ticks % 5 == 0:
-                self._refresh_tracks()
-            if self.ticks % 25 == 0:
-                self._save_position()
+    def _get_pos(self):
+        return float(self.st.get("pos", 0.0))
+
+    pos = Property(float, _get_pos, notify=posChanged)
+
+    def _changed(self):
+        """Algo que a tela mostra mudou (volume, repetir, proporção…): manda o estado de novo."""
         self._refresh_static()
+        self.stateChanged.emit()
+
+    def tick(self):
+        """Com o vídeo tocando: a posição, 4 vezes por segundo; a cada 5 s ela fica salva."""
+        if not self.path:
+            self.timer.stop()
+            return
+        pos = max(0, self.mp.get_time()) / 1000
+        if pos != self.st["pos"]:
+            self.st["pos"] = pos
+            self.posChanged.emit()
+        self.ticks += 1
+        if self.ticks % 20 == 0:
+            self._save_position()
+
+    def _apply_volume(self):
+        want = 0 if self.muted else self.vol
+        if self.mp.audio_get_volume() != want:
+            self.mp.audio_set_volume(want)
+
+    def _tracks_changed(self):
+        self._refresh_tracks()
+        self.stateChanged.emit()
+
+    def _on_vlc(self, name):
+        """Avisos do motor do VLC (já na thread da tela)."""
+        if not self.path:
+            return
+        mp = self.mp
+        if name == "MediaPlayerEndReached":
+            self._on_end()
+            return
+        if name in ("MediaPlayerPlaying", "MediaPlayerPaused", "MediaPlayerStopped", "MediaPlayerEncounteredError"):
+            self.st["playing"] = name == "MediaPlayerPlaying"
+            if self.st["playing"]:
+                self._apply_volume()  # o VLC volta ao volume padrão a cada vídeo novo
+                if not self.win.isMinimized():
+                    self.timer.start()
+            else:
+                self.timer.stop()
+                self.tick()
+            self._refresh_tracks()
+        elif name == "MediaPlayerLengthChanged":
+            dur = mp.get_length() / 1000
+            if dur <= 0:
+                return
+            self.st["dur"] = dur
+            if self.thumbs_for != self.path:
+                self.thumbs_for = self.path
+                self.thumbs.start(self.path, dur)
+            if self.pending_resume is not None:
+                at = self.pending_resume
+                self.pending_resume = None
+                if 30 < at < dur - 60:
+                    mp.set_time(int(at * 1000))
+                    self.toast.emit("Continuando de " + self._fmt(at))
+        else:  # faixas de áudio/legenda apareceram ou mudaram: junta vários avisos seguidos num só
+            self._tracks_soon.start()
+            return
         self.stateChanged.emit()
 
     def _refresh_tracks(self):
@@ -285,6 +341,7 @@ class Player(QObject):
         self.mp.play()
         self.mp.video_set_aspect_ratio(ASPECTS[self.aspect_i])
         self.st.update(hasMedia=True, title=Path(path).stem, found=self._find_subs(path))
+        self.posChanged.emit()
         nxt = self.playlist[self.index + 1] if 0 <= self.index < len(self.playlist) - 1 else ""
         prv = self.playlist[self.index - 1] if self.index > 0 else ""
         self.st.update(nextName=Path(nxt).stem if nxt else "", prevName=Path(prv).stem if prv else "")
@@ -307,6 +364,8 @@ class Player(QObject):
         else:
             self.mp.stop()
             self.st.update(playing=False, pos=self.st["dur"])
+            self.timer.stop()
+            self.posChanged.emit()
             self.stateChanged.emit()
 
     @staticmethod
@@ -501,21 +560,13 @@ class Player(QObject):
         return None
 
     # ---------- biblioteca dentro do onVLC ----------
-    @Slot(str)
-    def libraryPlay(self, data):
-        """A página da biblioteca pediu um vídeo: {id, pos}. Abre aqui, no ponto pedido (0 = do começo)."""
-        try:
-            req = json.loads(data)
-            items = self._library_items()
-        except Exception:
-            self.toast.emit("Não consegui falar com a biblioteca")
-            return
-        it = next((x for x in items if x["id"] == req.get("id")), None)
-        if not it or not it.get("path"):
+    @Slot(str, float)
+    def libraryOpenVideo(self, path, pos):
+        """A biblioteca pediu um vídeo. Abre aqui, no ponto pedido (0 = do começo)."""
+        if not os.path.isfile(path):
             self.toast.emit("Esse vídeo não está mais na pasta onVLC")
             return
-        self.open_path(it["path"])
-        pos = float(req.get("pos") or 0)
+        self.open_path(path)
         self.pending_resume = pos if pos > 0 else None  # "do começo": ignora a posição salva
 
     # ---------- pasta onVLC (o que a TV mostra) ----------
@@ -771,7 +822,7 @@ class Player(QObject):
         if self.path:
             self.mp.set_time(int(max(0, sec) * 1000))
             self.st["pos"] = sec
-            self.stateChanged.emit()
+            self.posChanged.emit()
 
     @Slot(float)
     def skip(self, d):
@@ -788,24 +839,27 @@ class Player(QObject):
     def setVolume(self, v):
         self.vol = max(0, min(self.vol_max, int(v)))
         self.muted = self.vol == 0
-        self.tick()
+        self._apply_volume()
+        self._changed()
 
     @Slot()
     def toggleMute(self):
         self.muted = not self.muted
-        self.tick()
+        self._apply_volume()
+        self._changed()
 
     @Slot()
     def toggleBoost(self):
         self.vol_max = 200 if self.vol_max == 100 else 100
         self.vol = min(self.vol, self.vol_max)
+        self._apply_volume()
         self.toast.emit("Volume até " + str(self.vol_max) + "%")
-        self.tick()
+        self._changed()
 
     @Slot(float)
     def setRate(self, r):
         self.mp.set_rate(r)
-        self.tick()
+        self._changed()
 
     @Slot(int)
     def stepRate(self, d):
@@ -836,19 +890,19 @@ class Player(QObject):
     @Slot()
     def toggleRepeat(self):
         self.repeat = not self.repeat
-        self.tick()
+        self._changed()
 
     @Slot()
     def toggleResume(self):
         self.resume = not self.resume
         self.settings.setValue("resume", "true" if self.resume else "false")
-        self.tick()
+        self._changed()
 
     @Slot()
     def cycleAspect(self):
         self.aspect_i = (self.aspect_i + 1) % len(ASPECTS)
         self.mp.video_set_aspect_ratio(ASPECTS[self.aspect_i])
-        self.tick()
+        self._changed()
 
     @Slot()
     def snapshot(self):
@@ -880,7 +934,7 @@ class Player(QObject):
         hwnd = int(self.win.winId())
         # HWND_TOPMOST = -1, HWND_NOTOPMOST = -2; SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
         ctypes.windll.user32.SetWindowPos(hwnd, -1 if self.on_top else -2, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
-        self.tick()
+        self._changed()
 
     @Slot()
     def toggleFullscreen(self):
@@ -923,6 +977,10 @@ def setup_log():
     h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s [pid %(process)d]: %(message)s"))
     logging.basicConfig(level=logging.INFO, handlers=[h])
     sys.excepthook = lambda t, v, tb: log.critical("erro não tratado", exc_info=(t, v, tb))
+    # avisos do Qt e da interface (erro num arquivo QML, imagem que não carregou) também vão para o registro
+    from PySide6.QtCore import QtMsgType, qInstallMessageHandler
+    qlog = logging.getLogger("onvlc.qt")
+    qInstallMessageHandler(lambda kind, ctx, msg: qlog.warning(msg) if kind != QtMsgType.QtDebugMsg else None)
     log.info("onVLC aberto: %s", " ".join(sys.argv[1:]))
 
 
@@ -938,8 +996,6 @@ def main():
     setup_log()
     # a biblioteca (onvlc-biblioteca.exe) abre antes da janela, em paralelo: quando a tela pedir a lista, ela já responde
     threading.Thread(target=_start_library, daemon=True).start()
-    from PySide6.QtWebEngineQuick import QtWebEngineQuick
-    QtWebEngineQuick.initialize()  # a biblioteca aparece numa página dentro da janela; tem que vir antes do app
     QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGL)
     app = QApplication(sys.argv)
     app.setApplicationName("onVLC")

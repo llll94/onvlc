@@ -18,8 +18,8 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
 
 1. **onVLC do PC** (`main.py` + `ui\Overlay.qml`): janela sem borda, python-vlc por baixo e uma camada QML transparente
    por cima (linha do tempo com miniatura, menu lateral, legendas do OpenSubtitles, Assistir na TV).
-   A **biblioteca** (mesma tela da TV) aparece dentro dele num WebEngineView quando abre sem vídeo, ou por Ctrl+B /
-   menu Mídia › Biblioteca.
+   A **biblioteca** (mesmo desenho da tela da TV, em QML próprio: `ui\Library.qml`) aparece dentro dele quando abre sem
+   vídeo, ou por Ctrl+B / menu Mídia › Biblioteca. Sem navegador embutido desde 2026-10-31 (pacote 587 → 111 MB).
 2. **Biblioteca** (`server\`, **em Go**, `onvlc-biblioteca.exe` ~8 MB, ~19 MB de RAM): processo separado, sem janela
    (ícone na bandeja), que lê a pasta **`C:\Users\lucas\Videos\onVLC`** (vigiada pelo Windows, `ReadDirectoryChangesW`,
    + conferência a cada 10 min), busca dados no TMDB e serve tudo na porta **8780** para a TV e para o PC.
@@ -38,8 +38,9 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
 
 | Arquivo | O que faz |
 |---|---|
-| `main.py` | Player do PC (classe `Player`), slots chamados pelo QML; abre a biblioteca (`library.start_detached()`) numa thread antes da janela; `QtWebEngineQuick.initialize()` antes do app; `libraryPlay` abre o vídeo pedido pela página |
-| `ui\Overlay.qml` | Toda a interface do PC; `libraryOpen`, `WebEngineView` em `http://127.0.0.1:8780/tv/?pc=1`; página pede ações navegando para `/pc/<cmd>` (play, close, move) e o QML intercepta |
+| `main.py` | Player do PC (classe `Player`), slots chamados pelo QML; abre a biblioteca (`library.start_detached()`) numa thread antes da janela. Estado por **avisos do VLC** (`_on_vlc`: Playing/Paused/EndReached/LengthChanged/ES*), não por polling: o `tick` (250 ms) só lê a posição com vídeo tocando e janela à vista e emite `posChanged` (propriedade `pos`), sem mandar o estado inteiro; `_changed()` manda o estado quando algo muda. `libraryOpenVideo(path, pos)`. Avisos do Qt/QML vão para o `onvlc.log` |
+| `ui\Overlay.qml` | Toda a interface do PC; `libraryOpen` + `Loader` do `Library.qml` (só existe aberta); a linha do tempo usa `player.pos`; menu montado uma vez (`menuList`) |
+| `ui\Library.qml` | Biblioteca do PC: canvas 1920×1080 escalado com as medidas do `tvui\style.css`; lê `/api/library` com ETag a cada 30 s (só aberta); 3 fileiras, destaque ao passar o mouse (sem rolar a fileira), rodinha troca de fileira, setas ‹ › / Shift+rodinha andam na fileira, página do filme/série/indisponível com "‹ Voltar" (e botão voltar do mouse/Esc); imagens decodificadas no tamanho do card; arrastar move a janela. Para ver sem abrir janela: `QT_QPA_PLATFORM=offscreen` + `QT_QPA_FONTDIR=C:\Windows\Fonts` + `grabWindow()` (a fonte variável do Windows sai errada nesse modo; usar "Segoe UI" só na prévia) |
 | `server\*.go` | Biblioteca em Go: `names.go` (nome do arquivo, legendas, idioma), `probe.go` (ffprobe/ffmpeg), `tmdb.go` (TMDB pt-BR, nova tentativa com espera crescente, chave lida do Gerenciador de Credenciais), `library.go` (índice, varredura, regras `isEnd`/`resumeAt`, assistidos), `listing.go` (`/api/library`), `positions.go` (posições no registro, mesmo lugar do player), `thumbs.go`, `watch.go` (vigia da pasta), `http.go` (rotas), `main.go` (porta exclusiva, bandeja). `ONVLC_PORT` muda a porta (testes) |
 | `library.py` | Lado do player: `LIB_DIR`, `is_sample`, `running()`, `start_detached()` (abre o `onvlc-biblioteca.exe`) |
 | `tvfolder.py` | Painel "Pasta onVLC" do PC: lista com nome da TV e estado; "Mandar para a TV" = hardlink na pasta (mesmo disco) ou cópia; lixeira; `find_tool` (ffmpeg); `VIDEO_EXTS` |
@@ -54,7 +55,7 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
 | `PcFinder.java` | Acha o PC: último IP salvo, senão varre x.x.x.1–254 na porta 8780 (`/api/hello`) |
 | `Progress.java` | POST da posição para o PC |
 | `CacheService.java` | Serviço em primeiro plano durante o filme |
-| `tools\build.py` | Compila a biblioteca em Go e gera `dist\onVLC\onVLC.exe` (PyInstaller, ~587 MB com o WebEngine) com o `onvlc-biblioteca.exe` ao lado, atalhos, registro como app de vídeo |
+| `tools\build.py` | Compila a biblioteca em Go e gera `dist\onVLC\onVLC.exe` (PyInstaller) com o `onvlc-biblioteca.exe` ao lado; `trim()` apaga do pacote o Qt que não é usado (3D, gráficos, mapas, multimídia, PDF, WebEngine, traduções fora pt-BR, `opengl32sw`): **~111 MB**; atalhos, registro como app de vídeo |
 | `tools\build_tvcache.py` | APK sem Gradle (javac → d8 → aapt2 → zipalign → apksigner), baixa o AAR do libVLC uma vez em `build\libvlc`, só `armeabi-v7a`, copia `tvui` para os assets; instala na Mi Box (`--no-install` para só gerar) |
 | `tools\tvjs.py` | Roda JS na página aberta na TV pelo adb (depuração do WebView): `python tools\tvjs.py "expressão"` |
 | `tools\make_icon.py`, `set_tmdb_key.py` | Ícone; guardar chave do TMDB |
@@ -124,7 +125,7 @@ Wi-Fi PC→Mi Box ~250 Mbps. Miniaturas: 200 em ~35 s no 4K. Kit de abertura: 66
 - Lucas: criar conta/chave do OpenSubtitles (legendas da internet no PC).
 - "Assistir na TV" do PC (`PlayActivity`) ainda abre o app do VLC; dá para trocar pelo player próprio.
 - Testar séries de verdade (só testadas com episódios falsos) e o próximo episódio automático.
-- App do PC mais leve (579 MB por causa do WebEngine; antes ~400 MB).
+- Cantos das imagens dos cards no PC ficam retos (o QML não corta pelo arredondado sem efeito extra).
 - Reservar IP fixo da Mi Box no roteador.
 - Tirar os registros de depuração de teclas quando não forem mais úteis.
 - Decidir se apaga a pasta `tv-videos` do Syncthing de vez.
