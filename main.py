@@ -625,6 +625,21 @@ class Player(QObject):
         return None
 
     # ---------- biblioteca dentro do onVLC ----------
+    @Slot()
+    def closeVideo(self):
+        """Voltou para a biblioteca: o filme fecha (como na TV). A posição fica salva para o "Continuar assistindo"."""
+        if not self.path:
+            return
+        self._save_position()
+        self.timer.stop()
+        self.path = None  # antes do stop: o aviso "parou" do VLC chega e é ignorado
+        self.mp.stop()
+        self.playlist, self.index = [], -1
+        self.lib_thumbs, self.thumbs_for = None, None
+        self._reset_media_state()
+        self.posChanged.emit()
+        self.stateChanged.emit()
+
     @Slot(str, float)
     def libraryOpenVideo(self, path, pos):
         """A biblioteca pediu um vídeo. Abre aqui, no ponto pedido (0 = do começo)."""

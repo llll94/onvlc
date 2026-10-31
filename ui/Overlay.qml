@@ -8,6 +8,8 @@ Item {
     property var s: player.state
     // a biblioteca (o mesmo desenho da tela da TV) por cima do player: abre sozinha quando não há vídeo
     property bool libraryOpen: !player.state.hasMedia
+    // voltou para a biblioteca com um filme aberto: o filme fecha (os controles do player não ficam por trás)
+    onLibraryOpenChanged: if (libraryOpen && s.hasMedia) player.closeVideo()
 
     // cores e fontes
     readonly property color orange: "#ff8a1f"
