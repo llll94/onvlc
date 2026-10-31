@@ -20,6 +20,7 @@
         android:icon="@drawable/icon"
         android:banner="@drawable/banner"
         android:allowBackup="false"
+        android:extractNativeLibs="false"
         android:usesCleartextTraffic="true">
 
         <!-- a biblioteca, na tela inicial da TV -->

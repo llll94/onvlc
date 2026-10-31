@@ -148,13 +148,13 @@ function card(it, wide, zone, when) {
     let src, sub;
     if (it.kind === "episode") { src = it.still || it.show.backdrop || it.show.frame; sub = `${epLabel(it)} · ${it.title}`; }
     else { src = it.backdrop || it.frame; sub = ""; }
-    return `<div class="card wide${it.broken ? " broken" : ""}" data-id="${it.id}" data-k="${k}"><img src="${img(src)}" alt="">${broken}
+    return `<div class="card wide${it.broken ? " broken" : ""}" data-id="${it.id}" data-k="${k}"><img src="${img(src)}" alt="" loading="lazy" decoding="async">${broken}
       <div class="cap"><div class="nm">${esc(nameOf(it))}</div>${sub ? `<div class="sub">${esc(sub)}</div>` : ""}${progressBits(it)}</div></div>`;
   }
   const poster = it.kind === "episode" ? it.show.poster : it.poster;
   const frame = it.kind === "episode" ? (it.still || it.show.frame) : it.frame;
-  const inner = poster ? `<img src="${img(poster)}" alt="">`
-    : `<img src="${img(frame)}" alt=""><div class="cap"><div class="nm">${esc(nameOf(it))}</div></div>`;
+  const inner = poster ? `<img src="${img(poster)}" alt="" loading="lazy" decoding="async">`
+    : `<img src="${img(frame)}" alt="" loading="lazy" decoding="async"><div class="cap"><div class="nm">${esc(nameOf(it))}</div></div>`;
   return `<div class="card poster${it.broken ? " broken" : ""}${it.kind === "gone" ? " gone" : ""}" data-id="${it.id}" data-k="${k}">${inner}${broken}</div>`;
 }
 
@@ -253,7 +253,10 @@ function hero(it) {
   const text = it.kind === "episode" ? (it.overview || it.show.overview) : it.overview;
   const box = view.querySelector(".hero");
   if (!box) return;
-  box.innerHTML = `<div class="logo">${titleBlock(it)}</div>${metaLine(it)}
+  if (!box.firstElementChild) box.innerHTML = `<div class="logo"></div><div class="rest"></div>`;
+  const logo = titleBlock(it);
+  if (box.dataset.logo !== logo) { box.firstElementChild.innerHTML = logo; box.dataset.logo = logo; }
+  box.lastElementChild.innerHTML = `${metaLine(it)}
     ${it.kind === "episode" ? `<div class="syn" style="-webkit-line-clamp:1">${esc(epLabel(it) + " · " + it.title)}</div>` : ""}
     ${OFFLINE ? offlineNote() : synopsis(text)}`;
 }
@@ -323,7 +326,7 @@ function renderShow(show, season, keepKey) {
 }
 function episodeCard(e) {
   const src = e.still || e.show.backdrop || e.show.frame;
-  return `<div class="card wide${e.broken ? " broken" : ""}" data-id="${e.id}" data-k="e:${e.id}"><img src="${img(src)}" alt="">
+  return `<div class="card wide${e.broken ? " broken" : ""}" data-id="${e.id}" data-k="e:${e.id}"><img src="${img(src)}" alt="" loading="lazy" decoding="async">
     ${e.broken ? `<div class="badge">Com problema</div>` : ""}
     <div class="cap"><div class="nm">${e.episode}. ${esc(e.title)}</div>
     ${e.pos ? progressBits(e) : `<div class="sub">${e.runtime ? hm(e.runtime) : ""}</div>`}</div></div>`;
@@ -515,15 +518,28 @@ tv.addEventListener("click", e => {
 });
 
 // ---------- carregar ----------
+let STATE_KEY = "";
 async function load() {
   clearTimeout(loadTimer);
   const wasOffline = OFFLINE;
   let text = null;
   try {
-    const r = await fetch("api/library", { cache: "no-store" });
-    if (!r.ok) throw new Error(r.status);
-    OFFLINE = r.headers.get("X-onVLC-Offline") === "1";
-    text = await r.text();
+    // o pedaço pequeno primeiro (versão da lista, onde parou cada vídeo, "lendo"); a lista inteira (capas,
+    // sinopses, faixas) só quando algo mudou. A biblioteca antiga (sem /api/state) cai direto na lista inteira.
+    let key = "";
+    const s = await fetch("api/state", { cache: "no-store" });
+    if (s.ok) {
+      OFFLINE = s.headers.get("X-onVLC-Offline") === "1";
+      const st = await s.json();
+      key = JSON.stringify([st.version, st.busy, st.continue, st.pos]);
+    }
+    if (!key || key !== STATE_KEY || !LIB) {
+      const r = await fetch("api/library", { cache: "no-store" });
+      if (!r.ok) throw new Error(r.status);
+      OFFLINE = r.headers.get("X-onVLC-Offline") === "1";
+      text = await r.text();
+      STATE_KEY = key;
+    }
   } catch (err) {
     OFFLINE = true;
   }

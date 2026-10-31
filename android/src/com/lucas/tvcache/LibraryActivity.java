@@ -63,8 +63,8 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
         player = new VideoPlayer(this, root, this);
         setContentView(root);
         web.requestFocus();
-        // espera um instante pela busca do PC para a primeira tela já vir com a lista nova
-        web.postDelayed(() -> web.loadUrl("http://127.0.0.1:" + CacheServer.PORT + "/ui/index.html"), 1200);
+        // abre na hora com a última lista guardada; quando o PC é achado, a página pede a lista nova sozinha
+        web.loadUrl("http://127.0.0.1:" + CacheServer.PORT + "/ui/index.html");
         handleIntent(getIntent());
     }
 
@@ -289,12 +289,14 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
     // ---------- VideoPlayer.Listener ----------
     @Override
     public void onState(JSONObject st) {
+        // o estado do cache já vem em JSON: entra no texto como está (sem ler e escrever de novo a cada meio segundo)
+        String js = st.toString();
         try {
-            st.put("cache", new JSONObject(CacheServer.get(this).statusJson()));
+            js = js.substring(0, js.length() - 1) + ",\"cache\":" + CacheServer.get(this).statusJson() + "}";
         } catch (Exception e) {
             // sem cache: só o estado do player
         }
-        web.evaluateJavascript("window.onPlayer && onPlayer(" + st + ")", null);
+        web.evaluateJavascript("window.onPlayer && onPlayer(" + js + ")", null);
         double t = st.optDouble("time", 0);
         if ("playing".equals(st.optString("state")) && Math.abs(t - lastSent) >= 10 && base != null) {
             lastSent = t;

@@ -6,8 +6,10 @@ O Lucas não programa: explicar em português simples, sem jargão; mostrar prot
 de tela; nunca matar o onVLC dele aberto (pedir para fechar); não mexer no mouse dele; não ligar/usar a TV se ele estiver
 assistindo (conferir antes com `tools\tvjs.py`).
 
-Última sessão: 2026-10-30 (Claude Code, sessão `0f571832…`). Plano detalhado e histórico no Obsidian:
+Última sessão: 2026-10-31 (refatoração em fases: plano `…\Claude Code\Plans\onvlc-refatoracao.md`). Histórico anterior:
 `C:\Users\lucas\Documents\Obsidian Vault\work\Claude Code\Plans\player-video-redesign.md`.
+O Lucas autorizou abrir e testar na TV sem chamá-lo (ele deixa o volume baixo); **não abrir janelas nem capturar a tela
+do PC** (ele pode estar jogando): para ver telas QML, renderizar fora da tela.
 Rede de casa (IPs, MACs, Mi Box): `…\Claude Code\Docs\Rede de casa.md`.
 
 ---
@@ -47,16 +49,16 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
 | `tvstream.py` | **Assistir na TV** (do PC): adb, Wake-on-LAN, liga TV por HDMI-CEC, `open_library(id, pos)` / `stop_library()` = `am start` no `LibraryActivity` com extras `play`/`pos` ou `stop` |
 | `thumbs.py` | Miniaturas da linha do tempo (200 quadros-chave, HDR com tonemap), usadas no PC e servidas à TV |
 | `opensubs.py` | Legendas do OpenSubtitles (falta o Lucas criar conta/chave) |
-| `tvui\index.html`, `app.js`, `style.css` | Página da biblioteca (1920×1080 escalada). Tela inicial sem abas, só 3 linhas: Continuar assistindo / Mídias (tudo, mais novo primeiro) / Vocês já assistiram (montada uma vez e reaproveitada); sem favoritos. Página do filme/série, indisponível, procurando PC. Modo PC com `?pc=1` |
+| `tvui\index.html`, `app.js`, `style.css` | Página da biblioteca (1920×1080 escalada; sem filtros/máscaras/sombras animadas no CSS; capas `loading=lazy`; a cada 30 s pede `api/state` e só baixa a lista inteira quando muda; destaque não recria o logo). Tela inicial sem abas, só 3 linhas: Continuar assistindo / Mídias (tudo, mais novo primeiro) / Vocês já assistiram (montada uma vez e reaproveitada); sem favoritos. Página do filme/série, indisponível, procurando PC. Modo PC com `?pc=1` |
 | `tvui\player.js` | Interface do player da TV (barra única com trecho guardado, miniatura ao procurar, painel áudio/legendas com rolagem, pausado, próximo episódio, nova tentativa se travar) |
 | `android\src\…\LibraryActivity.java` | Atividade da tela inicial: WebView transparente + `VideoPlayer` atrás; ponte JS `window.onvlc` (play, prepare, unprepare, toggle, seek, audio, spu, stop, warm, post) |
-| `VideoPlayer.java` | libVLC: SurfaceView vídeo + legenda, `:network-caching=400`, `:prefetch-read-size=262144`, `:prefetch-buffer-size=4096`, `:start-paused` para preparar, legendas externas como slave |
+| `VideoPlayer.java` | libVLC (iniciado em segundo plano quando o app abre): SurfaceView vídeo + legenda, `:network-caching=400`, `:prefetch-read-size=262144`, `:prefetch-buffer-size=4096`, `:start-paused` para preparar, legendas externas como slave; busca rápida (quadro-chave); avisa a página só quando o "carregando" começa/termina; lista de faixas só refeita nos eventos ES* |
 | `CacheServer.java` | Servidor local 127.0.0.1:8090: `/stream` (blocos de 8 MB, 5 min à frente, 1 min atrás, 2 GB de vários filmes), **kit de abertura** (até 4 GB, fixado), `/ui/*` (repassa a página e a API para o PC e guarda cópia para quando o PC está desligado; imagens com cache longo), `/status` |
 | `PcFinder.java` | Acha o PC: último IP salvo, senão varre x.x.x.1–254 na porta 8780 (`/api/hello`) |
 | `Progress.java` | POST da posição para o PC |
 | `CacheService.java` | Serviço em primeiro plano durante o filme |
 | `tools\build.py` | Compila a biblioteca em Go e gera `dist\onVLC\onVLC.exe` (PyInstaller) com o `onvlc-biblioteca.exe` ao lado; `trim()` apaga do pacote o Qt que não é usado (3D, gráficos, mapas, multimídia, PDF, WebEngine, traduções fora pt-BR, `opengl32sw`): **~111 MB**; atalhos, registro como app de vídeo |
-| `tools\build_tvcache.py` | APK sem Gradle (javac → d8 → aapt2 → zipalign → apksigner), baixa o AAR do libVLC uma vez em `build\libvlc`, só `armeabi-v7a`, copia `tvui` para os assets; instala na Mi Box (`--no-install` para só gerar) |
+| `tools\build_tvcache.py` | APK sem Gradle (javac → d8 → aapt2 → zipalign -p → apksigner), baixa o AAR do libVLC uma vez em `build\libvlc` (SHA-256 conferido), só `armeabi-v7a`, `.so` sem compressão + `extractNativeLibs=false` (APK 40,6 MB, nada extraído ao instalar), chave em `%LOCALAPPDATA%\onVLC`; instala na Mi Box (`--no-install` para só gerar; com a Mi Box dormindo, mandar WOL em loop durante o `adb install`) |
 | `tools\tvjs.py` | Roda JS na página aberta na TV pelo adb (depuração do WebView): `python tools\tvjs.py "expressão"` |
 | `tools\make_icon.py`, `set_tmdb_key.py` | Ícone; guardar chave do TMDB |
 
@@ -105,29 +107,37 @@ cada vídeo tem `id, path, file, size, dur, pos, bps, quality, audio, subs, extS
 
 ## Números medidos (Homem-Aranha 4K HDR, 20 GB, Mi Box)
 
+2026-10-31, depois da refatoração: abertura direta **4,4 s** (antes 5,4); pulo de +10 s volta a tocar em **0,3 s**;
+app abre na TV em 1,5 s; biblioteca (Go) ~19 MB de RAM; app do PC 111 MB (antes 587).
+
 Abertura direta ~5 s (2,9 s é o libVLC lendo o índice/Cues do MKV no processador da Mi Box; o buffer de 16 MB por pedido
 foi cortado). Com a página do filme aberta (pré-preparo pausado): 6 s na página → **0,6 s**; 3 s → 2,1 s.
 Wi-Fi PC→Mi Box ~250 Mbps. Miniaturas: 200 em ~35 s no 4K. Kit de abertura: 664 MB para 4 filmes.
 
-## Estado em 2026-10-30 (fim da sessão)
+## Estado em 2026-10-31 (fim da sessão)
+
+- Fases 0, 1 e 2 do plano `onvlc-refatoracao.md` no GitHub; **Fase 3 commitada só localmente** (falta o "ok" do Lucas
+  para o push). APK novo instalado na Mi Box; `.exe` novo em `dist\onVLC`.
+- Não medido: abertura **preparada** do 4K depois da Fase 3 (o teste por `tvjs.py` voltou vazio duas vezes; conferir).
+- Não feito da Fase 3: servir o bloco do cache enquanto ainda baixa (ganho ~0,3 s em pulo para trecho não guardado);
+  `CacheService` continua `dataSync`.
+- No "Continuar assistindo" só ficou Devoradores de Estrelas (10:24), que não veio dos testes.
+
+## Estado em 2026-10-30
 
 - Biblioteca com: Devoradores de Estrelas (Project Hail Mary, 4K HDR, PT-BR embutida), Homem-Aranha: De Volta ao Lar
   (4K HDR, PT-BR em .srt), Homem-Aranha: Um Novo Dia (1080p, várias .srt). **Harriet** foi movido de propósito para
   `C:\Users\lucas\Videos\` (com o `.pt-BR.srt`) para testar o card "indisponível"; está em "assistidos" (30/10).
-- "Continuar assistindo" do De Volta ao Lar veio dos testes de abertura (perguntei se pode tirar; sem resposta).
 - O processo da biblioteca rodando agora é a versão de desenvolvimento (`pythonw main.py --biblioteca`); depois de
   reiniciar o PC, quem abre é o `onVLC.exe`.
-- Ainda no código, para depuração: registro de teclas no app (`Log.i("onvlc", "tecla …")`) e `KEYLOG` no `player.js`;
-  depuração do WebView ligada (necessária para o `tvjs.py`).
+- Depuração do WebView ligada (necessária para o `tvjs.py`). O registro de teclas e o `KEYLOG` saíram em 2026-10-31.
 
 ## Pendências e ideias
 
 - Lucas: criar conta/chave do OpenSubtitles (legendas da internet no PC).
-- "Assistir na TV" do PC (`PlayActivity`) ainda abre o app do VLC; dá para trocar pelo player próprio.
 - Testar séries de verdade (só testadas com episódios falsos) e o próximo episódio automático.
 - Cantos das imagens dos cards no PC ficam retos (o QML não corta pelo arredondado sem efeito extra).
 - Reservar IP fixo da Mi Box no roteador.
-- Tirar os registros de depuração de teclas quando não forem mais úteis.
 - Decidir se apaga a pasta `tv-videos` do Syncthing de vez.
 - 2026-10-31: capítulos tirados do PC e da TV (o Lucas achou ruins); aviso "Mouse embaixo…" do PC tirado; favoritos tirados só da tela
   (`/api/favorite` e `favoritos.json` continuam na biblioteca, sem uso). Falta testar e gerar o APK.

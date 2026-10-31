@@ -242,6 +242,7 @@ final class CacheServer {
         String base = PcFinder.base();
         if (base != null) {
             HttpURLConnection c = null;
+            boolean ok = false;
             try {
                 c = connect(base + remote.replace(" ", "%20"));
                 c.setConnectTimeout(2000);
@@ -255,6 +256,7 @@ final class CacheServer {
                         f.write(body);
                     }
                     tmp.renameTo(cached);
+                    ok = true;
                     send(out, "200 OK", type, body, "X-onVLC-Offline: 0\r\n");
                     return;
                 }
@@ -265,7 +267,7 @@ final class CacheServer {
             } catch (IOException e) {
                 PcFinder.lost(ctx);
             } finally {
-                if (c != null) c.disconnect();
+                if (c != null && !ok) c.disconnect();
             }
         } else {
             PcFinder.search(ctx);
@@ -517,7 +519,8 @@ final class CacheServer {
      */
     private boolean makeRoom(long p, long ahead, long behind) {
         String prefix = key + "_";
-        while (cachedBytes() + BLOCK > LIMIT || diskLow()) {
+        long used = cachedBytes();
+        while (used + BLOCK > LIMIT || diskLow()) {
             String victim = null;
             long oldest = Long.MAX_VALUE;
             for (Map.Entry<String, Long> e : store.entrySet()) {
@@ -534,6 +537,7 @@ final class CacheServer {
             }
             if (victim == null) return false;
             drop(victim);
+            used -= BLOCK;
         }
         return true;
     }
@@ -582,6 +586,7 @@ final class CacheServer {
             c.disconnect();
             throw new IOException("pedaço de outro arquivo: " + cr);
         }
+        boolean ok = false;
         try (InputStream in = c.getInputStream(); FileOutputStream out = new FileOutputStream(tmp)) {
             byte[] buf = new byte[256 * 1024];
             long got = 0;
@@ -596,11 +601,13 @@ final class CacheServer {
             }
             if (got != to - from + 1) throw new IOException("bloco incompleto");
             out.getFD().sync();  // no disco de verdade antes de valer: uma queda de energia não deixa bloco cortado
+            ok = true;
         } catch (IOException e) {
             tmp.delete();
             throw e;
         } finally {
-            c.disconnect();
+            // lido até o fim, a conexão volta para ser usada no próximo bloco (sem abrir outra com o PC)
+            if (!ok) c.disconnect();
         }
         synchronized (lock) {
             if (!tmp.renameTo(dst)) {
@@ -689,6 +696,8 @@ final class CacheServer {
                 synchronized (lock) {
                     if (store.containsKey(n) && new File(dir, n + ".blk").exists()) continue;
                     store.remove(n);  // apagado pelo Android: baixa de novo
+                    // o filme aberto já está baixando este bloco: não baixa duas vezes
+                    if (n.startsWith(key + "_") && loading.contains(Long.parseLong(n.substring(n.indexOf('_') + 1)))) continue;
                 }
                 try {
                     while (true) {  // espera o filme que está tocando parar

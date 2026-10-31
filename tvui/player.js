@@ -183,15 +183,21 @@ function plFocus() {
 function plUpdate() {
   if (!PL.open) return;
   const st = PL.st, d = plDur(), t = plTime();
-  const seg = $("pl-bar").querySelector(".pl-seg");
-  const ranges = (st.cache && st.cache.ranges) || [];
-  seg.querySelector(".p").style.width = Math.max(0, Math.min(1, (st.time || 0) / d)) * 100 + "%";
-  // trechos já guardados na Mi Box
-  seg.querySelector(".c").innerHTML = ranges.map(([x, y]) => { x = Math.max(x, 0); y = Math.min(y, d); return y > x ? `<i style="position:absolute;top:0;bottom:0;left:${x / d * 100}%;width:${(y - x) / d * 100}%;background:rgba(255,255,255,.38)"></i>` : ""; }).join("");
   const px = Math.max(0, Math.min(1, t / d)) * 100;
-  $("pl-head").style.left = px + "%";
-  $("pl-t").textContent = clock(t);
-  $("pl-r").textContent = "-" + clock(Math.max(0, d - t));
+  // com a barra escondida não há o que redesenhar (o estado chega a cada meio segundo)
+  const barShown = PL.ui || PL.scrub !== null;
+  if (barShown) {
+    const seg = $("pl-bar").querySelector(".pl-seg");
+    seg.querySelector(".p").style.width = Math.max(0, Math.min(1, (st.time || 0) / d)) * 100 + "%";
+    // trechos já guardados na Mi Box: só mexe na página quando mudam
+    const ranges = (st.cache && st.cache.ranges) || [];
+    const html = ranges.map(([x, y]) => { x = Math.max(x, 0); y = Math.min(y, d); return y > x ? `<i style="position:absolute;top:0;bottom:0;left:${(x / d * 100).toFixed(2)}%;width:${((y - x) / d * 100).toFixed(2)}%;background:rgba(255,255,255,.38)"></i>` : ""; }).join("");
+    const c = seg.querySelector(".c");
+    if (c.dataset.html !== html) { c.innerHTML = html; c.dataset.html = html; }
+    $("pl-head").style.left = px + "%";
+    $("pl-t").textContent = clock(t);
+    $("pl-r").textContent = "-" + clock(Math.max(0, d - t));
+  }
   // procurando: miniatura e horário
   const prev = $("pl-prev");
   prev.hidden = PL.scrub === null;
@@ -344,7 +350,6 @@ function plStep() {
 }
 
 function plKey(k) {
-  plLog(k);
   const left = k === "ArrowLeft", right = k === "ArrowRight", up = k === "ArrowUp", down = k === "ArrowDown";
   const ok = k === "Enter" || k === " ";
   const dx = left ? -1 : right ? 1 : 0, dy = up ? -1 : down ? 1 : 0;
@@ -401,15 +406,7 @@ function plKey(k) {
   plUpdate();
 }
 
-// registro curto dos últimos botões no player (lido pelo PC com tools\tvjs.py "KEYLOG")
-window.KEYLOG = [];
-function plLog(what) {
-  KEYLOG.push(`${new Date().toTimeString().slice(0, 8)} ${what} panel=${PL.panel} ui=${PL.ui} focus=${PL.focus} scrub=${PL.scrub !== null}`);
-  if (KEYLOG.length > 40) KEYLOG.shift();
-}
-
 function plBack() {
-  plLog("voltar");
   if (PL.next !== null) { PL.nextOff = true; PL.next = null; plRenderNext(); return true; }
   if (PL.panel) { PL.panel = null; plRenderPanel(); plPoke(); plFocus(); plUpdate(); return true; }
   if (PL.scrub !== null) { PL.scrub = null; plUpdate(); return true; }

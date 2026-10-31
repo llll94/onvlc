@@ -4,6 +4,7 @@ Sem Gradle: javac → d8 → aapt2 → zipalign → apksigner, direto com o JDK 
 Uso: python tools\\build_tvcache.py [--no-install]
 """
 import glob
+import hashlib
 import os
 import shutil
 import subprocess
@@ -22,6 +23,8 @@ BOX = "192.168.1.31:5555"
 LIBVLC_VERSION = "3.7.7"
 LIBVLC_AAR = f"https://repo1.maven.org/maven2/org/videolan/android/libvlc-all/{LIBVLC_VERSION}/libvlc-all-{LIBVLC_VERSION}.aar"
 LIBVLC_DIR = ROOT / "build" / "libvlc"
+# impressão digital do pacote 3.7.7 (o mesmo do Maven Central, conferido pelo .sha1 de lá em 2026-10-31)
+LIBVLC_SHA256 = "b48dab96e0e90e34cce3861963500c144a5aadb1b249d501d6a4b104d849e61b"
 ABI = "armeabi-v7a"  # a Mi Box (32 bits)
 # chave própria do app (precisa ser sempre a mesma para atualizar por cima): fica fora do repositório,
 # e a senha, no Gerenciador de Credenciais do Windows (serviço onVLC, "apk_keystore")
@@ -36,6 +39,9 @@ def libvlc():
         print("› baixando o motor do VLC", LIBVLC_VERSION)
         tmp = aar.with_suffix(".tmp")
         urllib.request.urlretrieve(LIBVLC_AAR, tmp)
+        if hashlib.sha256(tmp.read_bytes()).hexdigest() != LIBVLC_SHA256:
+            tmp.unlink()
+            sys.exit("o pacote do motor do VLC baixado não é o esperado (impressão digital diferente)")
         os.replace(tmp, aar)
     out = LIBVLC_DIR / LIBVLC_VERSION
     jar, libs = out / "classes.jar", out / "jni" / ABI
@@ -99,11 +105,13 @@ def main():
     with zipfile.ZipFile(base, "a", zipfile.ZIP_DEFLATED) as z:
         for d in sorted(dex.glob("classes*.dex")):
             z.write(d, d.name)
+        # o motor vai sem compressão e alinhado em páginas: o Android usa direto do APK, sem copiar
+        # 38 MB para outra pasta ao instalar (android:extractNativeLibs="false" no manifesto)
         for so in vlc_libs:
-            z.write(so, f"lib/{ABI}/{so.name}")
+            z.write(so, f"lib/{ABI}/{so.name}", compress_type=zipfile.ZIP_STORED)
 
     aligned = OUT / "aligned.apk"
-    run(bt / "zipalign.exe", "-f", "4", base, aligned)
+    run(bt / "zipalign.exe", "-f", "-p", "4", base, aligned)
 
     import keyring
     import secrets

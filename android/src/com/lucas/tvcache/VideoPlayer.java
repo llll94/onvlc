@@ -45,6 +45,9 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
     private int videoW, videoH, sarNum = 1, sarDen = 1;
     private boolean ended, prepared;
     private long preparedAt;
+    private Thread warmer;  // o motor (38 MB de biblioteca nativa) começa a carregar quando o app abre
+    private JSONArray audioJson = new JSONArray(), spuJson = new JSONArray();
+    private boolean tracksDirty = true;  // a lista de faixas só é refeita quando o motor avisa que mudou
 
     VideoPlayer(Activity act, FrameLayout root, Listener listener) {
         this.act = act;
@@ -59,6 +62,14 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
         box.addView(video, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         box.addView(subs, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         root.addView(box, 0, new FrameLayout.LayoutParams(-1, -1));
+        final android.content.Context app = act.getApplicationContext();
+        warmer = new Thread(() -> {
+            ArrayList<String> opts = new ArrayList<>();
+            opts.add("--audio-time-stretch");
+            opts.add("--no-sub-autodetect-file");
+            lib = new LibVLC(app, opts);
+        }, "libvlc-init");
+        warmer.start();
     }
 
     boolean active() {
@@ -96,11 +107,15 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
     }
 
     private void open(String fileId, String url, long posMs, String[] subtitles, boolean paused) {
-        if (lib == null) {
-            ArrayList<String> opts = new ArrayList<>();
-            opts.add("--audio-time-stretch");
-            opts.add("--no-sub-autodetect-file");
-            lib = new LibVLC(act.getApplicationContext(), opts);
+        if (warmer != null) {  // quase sempre já terminou: o app abre bem antes do primeiro filme
+            try {
+                warmer.join();
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+            warmer = null;
+        }
+        if (mp == null) {
             mp = new MediaPlayer(lib);
             mp.setEventListener(this);
         }
@@ -111,6 +126,7 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
         ended = false;
         state = "opening";
         buffering = 0;
+        tracksDirty = true;
         box.setVisibility(View.VISIBLE);
         IVLCVout vout = mp.getVLCVout();
         vout.setVideoView(video);
@@ -144,15 +160,18 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
     }
 
     void seek(long ms) {
-        if (mp != null) mp.setTime(Math.max(0, ms), false);  // preciso (não só quadro-chave): o PC é rápido
+        // pelo quadro-chave mais perto: quem decodifica é a Mi Box, e a busca exata num 4K demora bem mais
+        if (mp != null) mp.setTime(Math.max(0, ms), true);
     }
 
     void setAudio(int track) {
         if (mp != null) mp.setAudioTrack(track);
+        tracksDirty = true;
     }
 
     void setSpu(int track) {
         if (mp != null) mp.setSpuTrack(track);
+        tracksDirty = true;
     }
 
     /** Para e devolve a posição; `report` avisa quem chamou (para mandar ao PC). */
@@ -172,6 +191,14 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
     }
 
     void release() {
+        if (warmer != null) {
+            try {
+                warmer.join();
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+            warmer = null;
+        }
         stop(true);
         if (mp != null) {
             mp.release();
@@ -198,8 +225,18 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
             case MediaPlayer.Event.Opening:
                 state = "opening";
                 break;
-            case MediaPlayer.Event.Buffering:
-                buffering = e.getBuffering();
+            case MediaPlayer.Event.Buffering: {
+                // chega várias vezes por segundo ao abrir e ao pular: só avisa a página quando termina ou recomeça
+                float b = e.getBuffering();
+                boolean changed = (b >= 100) != (buffering >= 100);
+                buffering = b;
+                if (!changed) return;
+                break;
+            }
+            case MediaPlayer.Event.ESAdded:
+            case MediaPlayer.Event.ESDeleted:
+            case MediaPlayer.Event.ESSelected:
+                tracksDirty = true;
                 break;
             case MediaPlayer.Event.Playing:
                 state = "playing";
@@ -263,9 +300,14 @@ final class VideoPlayer implements MediaPlayer.EventListener, IVLCVout.OnNewVide
             o.put("buffering", buffering);
             o.put("time", Math.max(0, mp.getTime()) / 1000.0);
             o.put("length", Math.max(0, mp.getLength()) / 1000.0);
-            o.put("audio", tracks(mp.getAudioTracks()));
+            if (tracksDirty) {
+                audioJson = tracks(mp.getAudioTracks());
+                spuJson = tracks(mp.getSpuTracks());
+                tracksDirty = false;
+            }
+            o.put("audio", audioJson);
             o.put("audioId", mp.getAudioTrack());
-            o.put("spu", tracks(mp.getSpuTracks()));
+            o.put("spu", spuJson);
             o.put("spuId", mp.getSpuTrack());
             listener.onState(o);
         } catch (Exception e) {
