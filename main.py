@@ -926,12 +926,18 @@ def setup_log():
     log.info("onVLC aberto: %s", " ".join(sys.argv[1:]))
 
 
-def main():
-    if "--biblioteca" in sys.argv:  # processo separado, sem janela: a biblioteca da TV
+def _start_library():
+    try:
         import library
-        library.main()
-        return
+        library.start_detached()  # continua rodando depois que a janela fecha
+    except Exception:
+        log.exception("não consegui abrir a biblioteca da TV")
+
+
+def main():
     setup_log()
+    # a biblioteca (onvlc-biblioteca.exe) abre antes da janela, em paralelo: quando a tela pedir a lista, ela já responde
+    threading.Thread(target=_start_library, daemon=True).start()
     from PySide6.QtWebEngineQuick import QtWebEngineQuick
     QtWebEngineQuick.initialize()  # a biblioteca aparece numa página dentro da janela; tem que vir antes do app
     QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGL)
@@ -942,11 +948,6 @@ def main():
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("PlayerLucas.Player")
     player = Player(app)
     player.show()
-    try:
-        import library
-        library.start_detached()  # continua rodando depois que a janela fecha
-    except Exception:
-        log.exception("não consegui abrir a biblioteca da TV")
     if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
         player.open_path(sys.argv[1])
     sys.exit(app.exec())

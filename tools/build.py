@@ -74,19 +74,31 @@ def register_app(exe):
     print("registrado como app de vídeo:", NAME)
 
 
+def build_library():
+    """A biblioteca da TV (pasta server\\, em Go): um .exe só, que vai junto do onVLC.exe."""
+    go = shutil.which("go") or str(Path(r"C:\Program Files") / "Go" / "bin" / "go.exe")
+    if not Path(go).exists():
+        sys.exit("Go não encontrado (winget install GoLang.Go)")
+    shutil.copy2(ROOT / "ui" / "icon.ico", ROOT / "server" / "icon.ico")
+    subprocess.run([go, "build", "-trimpath", "-ldflags", "-H windowsgui -s -w", "-o", "onvlc-biblioteca.exe", "."],
+                   cwd=ROOT / "server", check=True)
+    return ROOT / "server" / "onvlc-biblioteca.exe"
+
+
 def main():
     subprocess.run([sys.executable, str(ROOT / "tools" / "make_icon.py")], check=True)
+    lib_exe = build_library()
     subprocess.run([
         sys.executable, "-m", "PyInstaller", str(ROOT / "main.py"),
         "--name", NAME, "--noconfirm", "--windowed", "--onedir",
         "--icon", str(ROOT / "ui" / "icon.ico"),
         "--add-data", f"{ROOT / 'ui'}{os.pathsep}ui",
         "--add-data", f"{ROOT / 'tvui'}{os.pathsep}tvui",
-        "--hidden-import", "library",
         "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build"), "--specpath", str(ROOT / "build"),
     ], check=True)
 
     exe = ROOT / "dist" / NAME / f"{NAME}.exe"
+    shutil.copy2(lib_exe, exe.with_name(lib_exe.name))
     for folder in (DESKTOP, START_MENU):
         lnk = folder / f"{NAME}.lnk"
         ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}');"

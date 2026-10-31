@@ -1,6 +1,6 @@
 """Pasta onVLC: os vídeos que a TV mostra (Vídeos\\onVLC), vistos do player do PC.
 
-A biblioteca (library.py) lê a pasta e a TV toca direto do PC. Aqui fica o lado do player:
+A biblioteca (onvlc-biblioteca.exe, pasta server\\) lê a pasta e a TV toca direto do PC. Aqui fica o lado do player:
 - a lista da pasta com o nome que a TV mostra e o estado de cada vídeo (na TV, lendo, com problema);
 - "Mandar para a TV": põe o vídeo na pasta. No mesmo disco vira um link (instantâneo, sem ocupar espaço
   a mais e sem tirar o original de onde está); em outro disco, é copiado. Legendas com o mesmo nome vão junto;
@@ -25,7 +25,7 @@ NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW: ffmpeg sem janela preta
 
 
 def lib_dir():
-    import library  # aqui dentro: library.py também importa este módulo
+    import library
     return library.LIB_DIR
 
 
