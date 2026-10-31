@@ -99,6 +99,7 @@ class Player(QObject):
     _webResult = Signal(object)  # resposta do OpenSubtitles, vinda de outra thread
     _tvState = Signal(object)  # estado da pasta onVLC, vindo de outra thread
     _watchState = Signal(object)  # estado do Assistir na TV, vindo de outra thread
+    libraryShow = Signal(bool)  # mostra ou esconde a biblioteca por cima do player
 
     def __init__(self, app):
         super().__init__()
@@ -301,6 +302,7 @@ class Player(QObject):
         self.pending_resume = float(self.settings.value("pos/" + self._key(path), 0)) if self.resume else None
         self._add_recent(path)
         self.stateChanged.emit()
+        self.libraryShow.emit(False)  # abriu um vídeo: a biblioteca sai da frente
         if self.st["found"]:
             n = len(self.st["found"])
             QTimer.singleShot(1500, lambda: self.toast.emit(
@@ -508,6 +510,26 @@ class Player(QObject):
                 continue
         self.toast.emit("Não consegui salvar a legenda")
         return None
+
+    # ---------- biblioteca dentro do onVLC ----------
+    @Slot(str)
+    def libraryPlay(self, data):
+        """A página da biblioteca pediu um vídeo: {id, pos}. Abre aqui, no ponto pedido (0 = do começo)."""
+        try:
+            req = json.loads(data)
+            with urllib.request.urlopen("http://127.0.0.1:8780/api/library", timeout=3) as r:
+                lib = json.load(r)
+        except Exception:
+            self.toast.emit("Não consegui falar com a biblioteca")
+            return
+        items = list(lib["movies"]) + [e for s in lib["shows"] for se in s["seasons"] for e in se["episodes"]]
+        it = next((x for x in items if x["id"] == req.get("id")), None)
+        if not it or not it.get("path"):
+            self.toast.emit("Esse vídeo não está mais na pasta onVLC")
+            return
+        self.open_path(it["path"])
+        pos = float(req.get("pos") or 0)
+        self.pending_resume = pos if pos > 0 else None  # "do começo": ignora a posição salva
 
     # ---------- pasta onVLC (o que a TV mostra) ----------
     def _on_tv(self, data):
@@ -905,6 +927,8 @@ def main():
         library.main()
         return
     setup_log()
+    from PySide6.QtWebEngineQuick import QtWebEngineQuick
+    QtWebEngineQuick.initialize()  # a biblioteca aparece numa página dentro da janela; tem que vir antes do app
     QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGL)
     app = QApplication(sys.argv)
     app.setApplicationName("onVLC")

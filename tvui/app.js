@@ -5,6 +5,10 @@
  * Tocar: window.onvlc.play(...) é a ponte do app Android; no navegador do PC só mostra um aviso.
  */
 const $ = id => document.getElementById(id);
+// dentro do onVLC do PC (?pc): mouse em vez de controle, e "Assistir" abre no player do PC
+const PC = /[?&]pc\b/.test(location.search);
+let dragging = false;
+function host(cmd, data) { location.href = "/pc/" + cmd + (data ? "?d=" + encodeURIComponent(JSON.stringify(data)) : ""); }
 const tv = $("tv"), view = $("view");
 const TABS = ["Início", "Filmes", "Séries"];
 
@@ -479,6 +483,7 @@ function play(it, fromStart) {
   if (OFFLINE) return toast("O PC está desligado. Abra o onVLC no PC e tente de novo.", 3500);
   const pos = fromStart ? 0 : (it.pos || 0);
   const title = it.kind === "episode" ? `${it.show.title} · ${epLabel(it)} · ${it.title}` : it.title;
+  if (PC) return host("play", { id: it.id, pos });
   if (window.onvlc) {
     openPlayer(it, Math.round(pos * 1000));  // player.js: toca aqui mesmo, com o motor do VLC
   } else {
@@ -507,6 +512,7 @@ function back() {
     focus();
     return true;
   }
+  if (PC) { host("close"); return true; }  // no PC: volta para o vídeo aberto
   return false;  // o app fecha
 }
 window.tvBack = back;
@@ -530,10 +536,34 @@ document.addEventListener("keydown", e => {
   else return;
   e.preventDefault();
 });
+if (PC) {
+  // mouse: passar por cima foca, a rodinha anda entre as linhas
+  tv.addEventListener("mouseover", e => {
+    const el = e.target.closest("[data-k]");
+    if (!el || el === current() || PL.open) return;
+    zones.forEach((z, a) => z.forEach((x, b) => { if (x === el) { zi = a; cols[a] = b; } }));
+    focus();
+  });
+  // clicar, segurar e arrastar move a janela do onVLC (como em cima do vídeo); um clique simples abre
+  let down = null;
+  addEventListener("mousedown", e => { down = e.button === 0 ? { x: e.clientX, y: e.clientY } : null; });
+  addEventListener("mouseup", () => { down = null; });
+  addEventListener("mousemove", e => {
+    if (!down || !(e.buttons & 1)) return;
+    if (Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y) > 6) { down = null; dragging = true; host("move"); }
+  });
+  let wheelAt = 0;
+  addEventListener("wheel", e => {
+    if (Date.now() - wheelAt < 180 || PL.open) return;
+    wheelAt = Date.now();
+    move(0, e.deltaY > 0 ? 1 : -1);
+  }, { passive: true });
+}
 tv.addEventListener("click", e => {
   const el = e.target.closest("[data-k]");
   if (!el) return;
-  const same = el === current();
+  if (dragging) { dragging = false; return; }  // terminou de arrastar a janela: não é clique
+  const same = el === current() || PC;  // no PC um clique já abre (o foco vem com o mouse)
   zones.forEach((z, a) => z.forEach((x, b) => { if (x === el) { zi = a; cols[a] = b; } }));
   focus();
   if (same || el.classList.contains("btn") || el.classList.contains("tab")) activate();
@@ -578,6 +608,7 @@ function tick() {
   const d = new Date();
   $("clock").textContent = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
+if (PC) document.documentElement.classList.add("pc");
 addEventListener("resize", fit);
 fit();
 tick();

@@ -5,6 +5,8 @@ html, body { margin: 0; height: 100%; background: #0b0b0c; overflow: hidden; }
 #tv { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0;
   color: #f4f2ee; font-family: var(--font); background: #0b0b0c; overflow: hidden; }
 [hidden] { display: none !important; }
+html.pc #pc, html.pc .clock { display: none; }  /* dentro do onVLC do PC: o aviso de "PC ligado" não faz sentido */
+html.pc .card, html.pc .btn, html.pc .tab { cursor: pointer; }
 img { display: block; }
 
 .bg { position: absolute; inset: 0; background: #0b0b0c center top / cover no-repeat; opacity: 0; transition: opacity .4s ease; }

@@ -662,7 +662,7 @@ def is_end(pos, dur):
 
 
 def _common(r):
-    return {"file": r["file"], "size": r["size"], "dur": r.get("dur", 0), "pos": r.get("pos", 0),
+    return {"file": r["file"], "path": r["path"], "size": r["size"], "dur": r.get("dur", 0), "pos": r.get("pos", 0),
             "chapters": r.get("chapters", []),
             "extSubs": [{"n": i, "name": x["name"]} for i, x in enumerate(r.get("extSubs") or [])],
             "quality": r.get("quality", ""), "audio": r.get("audio", []), "subs": r.get("subs", []),

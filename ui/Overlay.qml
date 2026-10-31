@@ -1,4 +1,5 @@
 ﻿import QtQuick
+import QtWebEngine
 
 // Camada transparente por cima do vídeo: barra de baixo, faixa de cima, menu, quadros e avisos.
 Item {
@@ -6,6 +7,8 @@ Item {
     focus: true
 
     property var s: player.state
+    // a biblioteca (a mesma tela da TV) por cima do player: abre sozinha quando não há vídeo
+    property bool libraryOpen: !player.state.hasMedia
 
     // cores e fontes
     readonly property color orange: "#ff8a1f"
@@ -157,7 +160,8 @@ Item {
         var found = (s.found || []).length
         switch (c) {
         case "midia":
-            var a = [{ t: "Abrir arquivo…", k: "Ctrl+O", act: "open" }, { t: "Abrir pasta…", act: "openFolder" }]
+            var a = [{ t: "Biblioteca", k: "Ctrl+B", act: "library" }, { t: "Abrir arquivo…", k: "Ctrl+O", act: "open" },
+                     { t: "Abrir pasta…", act: "openFolder" }]
             var rec = s.recent || []
             if (rec.length) {
                 a.push({ head: "Recentes" })
@@ -213,6 +217,7 @@ Item {
         if (a.indexOf("recent:") === 0) { menuOpen = false; player.openPath(a.substring(7)); return }
         switch (a) {
         case "open": menuOpen = false; player.openFile(); break
+        case "library": menuOpen = false; libraryOpen = true; break
         case "openFolder": menuOpen = false; player.openFolder(); break
         case "quit": player.close(); break
         case "rateNext": player.stepRate(s.rate >= 2 ? -5 : 1); break
@@ -273,6 +278,7 @@ Item {
             return
         }
         if (ctrl && e.key === Qt.Key_O) { player.openFile(); return }
+        if (ctrl && e.key === Qt.Key_B) { libraryOpen = true; return }
         if (ctrl && e.key === Qt.Key_Q) { player.close(); return }
         if (menuOpen) return
         switch (e.key) {
@@ -296,6 +302,19 @@ Item {
     Connections {
         target: player
         function onToast(m) { root.showToast(m) }
+        function onLibraryShow(on) { root.libraryOpen = on }
+    }
+
+    // pedidos da página da biblioteca: ela navega para /pc/<comando> e o onVLC intercepta
+    function libraryCmd(cmd) {
+        if (cmd.indexOf("play?d=") === 0) {
+            player.libraryPlay(decodeURIComponent(cmd.substring(7)))
+            libraryOpen = false
+        } else if (cmd === "move") {
+            player.startMove()  // clicou, segurou e arrastou na biblioteca: move a janela
+        } else if (cmd === "close" && s.hasMedia) {
+            libraryOpen = false
+        }
     }
 
     // ---------- componentes ----------
@@ -558,6 +577,29 @@ Item {
         }
     }
 
+    // ---------- biblioteca ----------
+    Rectangle {
+        anchors.fill: parent
+        visible: root.libraryOpen
+        color: "#0b0b0c"
+        MouseArea { anchors.fill: parent; hoverEnabled: true }  // não deixa o clique chegar no player embaixo
+        WebEngineView {
+            id: libView
+            anchors.fill: parent
+            url: "http://127.0.0.1:8780/tv/?pc=1"
+            backgroundColor: "#0b0b0c"
+            onNavigationRequested: function (request) {
+                var u = request.url.toString(), i = u.indexOf("/pc/")
+                if (i >= 0) { request.reject(); root.libraryCmd(u.substring(i + 4)) }
+            }
+            // a biblioteca ainda subindo junto com o onVLC: tenta de novo
+            onLoadingChanged: function (info) { if (info.status === WebEngineView.LoadFailedStatus) libRetry.start() }
+            Timer { id: libRetry; interval: 1500; onTriggered: libView.reload() }
+        }
+        onVisibleChanged: if (visible) { libView.forceActiveFocus(); libView.runJavaScript("window.tvRefresh && tvRefresh()") }
+                          else root.forceActiveFocus()
+    }
+
     Ripple { id: ripL; label: "−10 s"; x: parent.width * 0.18; anchors.verticalCenter: parent.verticalCenter }
     Ripple { id: ripR; label: "+10 s"; x: parent.width * 0.82 - width; anchors.verticalCenter: parent.verticalCenter }
     Ripple { id: bigplay; icon: "pause"; width: 96; height: 96; radius: 48; anchors.centerIn: parent }
@@ -567,7 +609,7 @@ Item {
         id: topBar
         anchors { left: parent.left; right: parent.right; top: parent.top }
         height: 100
-        opacity: (root.showTop || !s.hasMedia) ? 1 : 0
+        opacity: (root.showTop || !s.hasMedia || root.libraryOpen) ? 1 : 0
         visible: opacity > 0.01
         Behavior on opacity { NumberAnimation { duration: 200 } }
         HoverHandler { id: topHover }
@@ -581,6 +623,7 @@ Item {
         MouseArea {
             anchors { left: parent.left; right: parent.right; top: parent.top }
             height: 56
+            enabled: !root.libraryOpen  // na biblioteca, as abas ficam aqui; arrastar é clicar, segurar e mover
             onPressed: player.startMove()
             onDoubleClicked: player.toggleMaximize()
         }
