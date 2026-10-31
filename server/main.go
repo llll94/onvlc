@@ -176,6 +176,8 @@ func setupLog() {
 		return
 	}
 	log.SetOutput(f)
+	// se a biblioteca cair por um erro grave, o motivo fica no registro (sem janela, não há outro lugar para ver)
+	debug.SetCrashOutput(f, debug.CrashOptions{})
 	log.SetFlags(log.Ldate | log.Ltime)
 	log.SetPrefix("biblioteca ")
 }

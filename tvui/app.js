@@ -449,7 +449,7 @@ function back() {
   return false;  // o app fecha
 }
 window.tvBack = back;
-window.tvRefresh = () => load();
+window.tvRefresh = () => { autoWoke = false; load(); };  // o app voltou para a frente: tenta acordar de novo se precisar
 
 // "Assistir na TV" do PC: o app passa {id, pos (s)}; toca assim que o vídeo estiver na lista
 // (um vídeo recém-posto na pasta leva uns segundos para a biblioteca ler)
@@ -529,9 +529,11 @@ tv.addEventListener("click", e => {
 let waking = 0;  // quando o botão foi apertado (a página procura o PC mais vezes por 2 min)
 const canWake = () => !!(window.onvlc && window.onvlc.canWakePc && window.onvlc.canWakePc());
 const wakeZone = () => $("wake").hidden ? [] : [$("wake")];
+let autoWoke = false;  // ao abrir o app: se o PC não responder, manda acordar uma vez sozinho
 function updateWake() {
   const b = $("wake");
   if (!OFFLINE) waking = 0;
+  if (OFFLINE && !autoWoke && canWake()) { autoWoke = true; setTimeout(wakePc, 0); }
   b.hidden = !(OFFLINE && canWake());
   b.textContent = waking ? "Ligando o PC…" : "Ligar o PC";
 }

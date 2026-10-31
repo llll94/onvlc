@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import winreg
 from pathlib import Path
 
@@ -121,10 +122,55 @@ def trim(internal):
     print(f"Qt: {before / 2**20:.0f} MB -> {after / 2**20:.0f} MB")
 
 
+TASK = "onVLC biblioteca"
+
+
 def start_with_windows(lib_exe):
-    """Só a biblioteca (leve, sem janela) abre quando o Windows liga: a TV acha o PC sempre, mesmo sem o player aberto."""
-    _set(r"Software\Microsoft\Windows\CurrentVersion\Run", "onVLC biblioteca", f'"{lib_exe}"')
-    print("biblioteca abre com o Windows:", lib_exe)
+    """Mantém a biblioteca aberta enquanto o PC está ligado (a TV acha o PC sempre): uma tarefa do Windows abre ela
+    no login, ao voltar da suspensão e a cada minuto se ela tiver fechado. Enquanto ela está aberta, a tarefa
+    não abre outra (e, se alguém abrir, a segunda vê a porta ocupada e sai na hora)."""
+    user = os.environ["USERDOMAIN"] + "\\" + os.environ["USERNAME"]
+    resume = ("&lt;QueryList&gt;&lt;Query Id=\"0\" Path=\"System\"&gt;&lt;Select Path=\"System\"&gt;"
+              "*[System[Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and EventID=1]]"
+              "&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;")
+    start = time.strftime("%Y-%m-%dT%H:%M:%S")  # a conferência de 1 em 1 min começa já (e continua para sempre)
+    xml = f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Mantém a biblioteca do onVLC aberta para a TV achar o PC</Description></RegistrationInfo>
+  <Triggers>
+    <LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId></LogonTrigger>
+    <TimeTrigger>
+      <StartBoundary>{start}</StartBoundary><Enabled>true</Enabled>
+      <Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
+    </TimeTrigger>
+    <EventTrigger><Enabled>true</Enabled><Subscription>{resume}</Subscription></EventTrigger>
+  </Triggers>
+  <Principals><Principal id="Author"><UserId>{user}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit><StartWhenAvailable>true</StartWhenAvailable><Hidden>true</Hidden>
+    <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>{lib_exe}</Command><WorkingDirectory>{lib_exe.parent}</WorkingDirectory></Exec></Actions>
+</Task>
+"""
+    tmp = ROOT / "build" / "biblioteca-task.xml"
+    tmp.parent.mkdir(exist_ok=True)
+    tmp.write_text(xml, encoding="utf-16")
+    r = subprocess.run(["schtasks", "/Create", "/TN", TASK, "/XML", str(tmp), "/F"], capture_output=True, text=True)
+    if r.returncode == 0:
+        # a entrada antiga de "abrir com o Windows" sai: a tarefa faz o mesmo e mais
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0,
+                                winreg.KEY_SET_VALUE) as k:
+                winreg.DeleteValue(k, TASK)
+        except FileNotFoundError:
+            pass
+        print("biblioteca: tarefa do Windows (login, volta da suspensão e a cada 1 min):", lib_exe)
+    else:  # sem permissão para a tarefa: fica pelo menos abrindo no login
+        _set(r"Software\Microsoft\Windows\CurrentVersion\Run", TASK, f'"{lib_exe}"')
+        print("biblioteca abre com o Windows (a tarefa não pôde ser criada:", (r.stderr or r.stdout).strip(), ")")
 
 
 def main():

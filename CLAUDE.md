@@ -26,8 +26,13 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
    (ícone na bandeja), que lê a pasta **`C:\Users\lucas\Videos\onVLC`** (vigiada pelo Windows, `ReadDirectoryChangesW`,
    + conferência a cada 10 min), busca dados no TMDB e serve tudo na porta **8780** para a TV e para o PC.
    Substituiu o `library.py` em 2026-10-31 com os mesmos arquivos de dados e as mesmas rotas.
-   **Abre com o Windows** (só ela, desde 2026-10-31: `HKCU\…\Run` "onVLC biblioteca" → `dist\onVLC\onvlc-biblioteca.exe`,
-   criado pelo `build.py`); o player continua abrindo só quando o Lucas quer. O onVLC também abre a biblioteca se ela não estiver no ar.
+   **Sempre no ar enquanto o PC está ligado**: tarefa do Windows "onVLC biblioteca" (criada pelo `build.py`,
+   `start_with_windows`) abre `dist\onVLC\onvlc-biblioteca.exe` no login, ao voltar da suspensão e a cada 1 min se tiver
+   fechado (testado: derrubada, volta em ≤1 min). O player continua abrindo só quando o Lucas quer. Erro grave da
+   biblioteca vai para o `biblioteca.log` (`debug.SetCrashOutput`).
+   **A TV liga o PC**: botão "Ligar o PC" (e uma vez sozinha ao abrir o app, se o PC não responder) manda Wake-on-LAN
+   para o MAC que a biblioteca informa no `/api/hello` (`PcFinder.wake`). Testado com o PC em suspensão; desligado
+   depende da BIOS (placa Realtek já com "Wake on Magic Packet" e "Shutdown WOL" ligados) e do login do Windows.
 3. **App da Mi Box** (`android\`, pacote `com.lucas.tvcache`, nome "onVLC"): tela inicial da TV com a biblioteca (página
    `tvui\` num WebView) e **player próprio com libVLC 3.7.7** (sem usar o app do VLC). Inclui o cache em blocos (TV Cache).
 
@@ -54,7 +59,7 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
 | `android\src\…\LibraryActivity.java` | Atividade da tela inicial: WebView transparente + `VideoPlayer` atrás; ponte JS `window.onvlc` (play, prepare, unprepare, toggle, seek, audio, spu, stop, warm, post) |
 | `VideoPlayer.java` | libVLC (iniciado em segundo plano quando o app abre): SurfaceView vídeo + legenda, `:network-caching=400`, `:prefetch-read-size=262144`, `:prefetch-buffer-size=4096`, `:start-paused` para preparar, legendas externas como slave; busca rápida (quadro-chave); avisa a página só quando o "carregando" começa/termina; lista de faixas só refeita nos eventos ES* |
 | `CacheServer.java` | Servidor local 127.0.0.1:8090: `/stream` (blocos de 8 MB, 5 min à frente, 1 min atrás, 2 GB de vários filmes; bloco ainda chegando já é entregue conforme chega, `partial`), **kit de abertura** (até 4 GB, fixado), `/ui/*` (repassa a página e a API para o PC e guarda cópia para quando o PC está desligado; imagens com cache longo), `/status` |
-| `PcFinder.java` | Acha o PC: último IP salvo, senão varre x.x.x.1–254 na porta 8780 (`/api/hello`) |
+| `PcFinder.java` | Acha o PC: último IP salvo, senão varre x.x.x.1–254 na porta 8780 (`/api/hello`, guarda o MAC); `wake()` = Wake-on-LAN |
 | `Progress.java` | POST da posição para o PC |
 | `CacheService.java` | Serviço em primeiro plano durante o filme |
 | `tools\build.py` | Compila a biblioteca em Go e gera `dist\onVLC\onVLC.exe` (PyInstaller) com o `onvlc-biblioteca.exe` ao lado; `trim()` apaga do pacote o Qt que não é usado (3D, gráficos, mapas, multimídia, PDF, WebEngine, traduções fora pt-BR, `opengl32sw`): **~111 MB**; atalhos, registro como app de vídeo |
@@ -64,7 +69,7 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
 
 ## API da biblioteca (porta 8780)
 
-`GET /api/hello` (version 2 = Go) · `GET /api/library` (filmes, séries, `continue`, `history`, `busy`, `tmdb`, `version`; ETag/304, gzip;
+`GET /api/hello` (version 2 = Go; `mac` da placa por onde o pedido chegou) · `GET /api/library` (filmes, séries, `continue`, `history`, `busy`, `tmdb`, `version`; ETag/304, gzip;
 cada vídeo tem `id, path, file, size, dur, pos, bps, quality, audio, subs, extSubs, watched, broken…`) ·
 `GET /api/state` (pequeno: `version`, `busy`, `continue`, `pos` por id, `history` recente) ·
 `GET /api/media?path=` (só 127.0.0.1: posição, `resume`, legendas de qualquer arquivo) ·
@@ -82,7 +87,7 @@ cada vídeo tem `id, path, file, size, dur, pos, bps, quality, audio, subs, extS
 
 ## Casa e Mi Box
 
-- PC 192.168.1.69 (cabo, nunca dorme). Mi Box `192.168.1.31` (MiTV-AFMU0, Android 14, armeabi-v7a, MAC `AA-BB-CC-00-00-01`),
+- PC 192.168.1.69 (cabo; MAC `AA-BB-CC-00-00-04`, Realtek 2.5GbE; suspensão S3 acorda pela rede). Mi Box `192.168.1.31` (MiTV-AFMU0, Android 14, armeabi-v7a, MAC `AA-BB-CC-00-00-01`),
   adb `192.168.1.31:5555` autorizado. TV LG C1 4K `192.168.1.13` (porta 3000 só com ela ligada). Mi Box desenha em 1920×1080.
 - `tvstream.MiBox().connect()` acorda pela rede (WOL repetido); `KEYCODE_WAKEUP` liga a TV via HDMI-CEC mas **traz a tela
   inicial do Google TV para frente** (o app fica congelado em segundo plano). Para abrir o app use só `am start -n com.lucas.tvcache/.LibraryActivity`.
@@ -96,6 +101,9 @@ cada vídeo tem `id, path, file, size, dur, pos, bps, quality, audio, subs, extS
 
 ## Como testar
 
+- **Quem roda de verdade é a cópia de `dist\onVLC`** (biblioteca + `_internal\tvui`). Mudou `server\` ou `tvui\`? Gerar o
+  pacote de novo (`python tools\build.py`, fechando o onVLC antes) e recarregar a TV — senão a TV guarda a página antiga
+  (aconteceu em 2026-10-31: o botão "Ligar o PC" sumiu porque a biblioteca de `dist` estava desatualizada).
 - PC sem empacotar: `python main.py [arquivo]`. Biblioteca: `cd server && go build -ldflags "-H windowsgui -s -w" -o onvlc-biblioteca.exe .`
   (Go em `C:\Program Files\Go\bin`), depois `python -c "import library; library.start_detached()"`; para reiniciar,
   `taskkill /IM onvlc-biblioteca.exe /F`. Teste lado a lado: `ONVLC_PORT=8781` + `LOCALAPPDATA` apontando para uma cópia dos dados.
