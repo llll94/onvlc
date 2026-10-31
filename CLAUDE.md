@@ -3,7 +3,7 @@
 Projeto pessoal do Lucas . Repositório privado: **github.com/llll94/onvlc** (branch `main`).
 Commits como `Lucas Schunck <148644814+llll94@users.noreply.github.com>` (já configurado no repo).
 O Lucas não programa: explicar em português simples, sem jargão; mostrar protótipo (Artifact) antes de codar ideias novas
-de tela; nunca matar o onVLC dele aberto (pedir para fechar); não mexer no mouse dele; não ligar/usar a TV se ele estiver
+de tela; **para regerar o `.exe`, fechar o onVLC aberto antes** (`taskkill /IM onVLC.exe`, autorizado em 2026-10-31; fora isso, não matar o onVLC dele); não mexer no mouse dele; não ligar/usar a TV se ele estiver
 assistindo (conferir antes com `tools\tvjs.py`).
 
 Última sessão: 2026-10-31 (refatoração em fases: plano `…\Claude Code\Plans\onvlc-refatoracao.md`). Histórico anterior:

@@ -835,9 +835,23 @@ Item {
     }
 
     Pop {
+        id: trkPop
         name: "tracks"
         width: Math.min(440, root.width - 24)
-        height: (root.trackView === "main" ? trkMain.implicitHeight : root.trackView === "found" ? trkFound.implicitHeight : trkWeb.implicitHeight) + 26
+        // nunca maior que o espaço acima do botão, dentro da janela; o que não couber rola
+        readonly property real contentH: (root.trackView === "main" ? trkMain.implicitHeight : root.trackView === "found" ? trkFound.implicitHeight : trkWeb.implicitHeight) + 26
+        // pela posição final da barra de baixo (ela sobe 14 px numa animação ao aparecer), com folga no topo
+        readonly property real maxH: Math.max(160, (root.popAnchor ? bottomBar.y + root.popAnchor.mapToItem(bottomBar, 0, 0).y : root.height - 120) - 32)
+        height: Math.min(contentH, maxH)
+        Connections { target: root; function onTrackViewChanged() { trkFlick.contentY = 0 } }
+        Flickable {
+            id: trkFlick
+            anchors.fill: parent
+            clip: true
+            contentWidth: width
+            contentHeight: trkPop.contentH
+            boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
         Column {
             id: trkMain
             visible: root.trackView === "main"
@@ -1064,6 +1078,15 @@ Item {
                     onClicked: player.webSearch()
                 }
             }
+        }
+        }
+        // barrinha que mostra onde a lista está (só quando não cabe tudo)
+        Rectangle {
+            visible: trkFlick.contentHeight > trkFlick.height + 1
+            x: parent.width - 6; width: 3; radius: 1.5
+            y: 8 + (parent.height - 16 - height) * (trkFlick.contentY / Math.max(1, trkFlick.contentHeight - trkFlick.height))
+            height: Math.max(28, (parent.height - 16) * trkFlick.height / Math.max(1, trkFlick.contentHeight))
+            color: Qt.rgba(1, 1, 1, 0.35)
         }
     }
 
