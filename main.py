@@ -7,7 +7,6 @@ o menu e os quadros. As duas andam juntas.
 import ctypes
 import difflib
 import hashlib
-import json
 import logging
 import os
 import re
@@ -390,7 +389,7 @@ class Player(QObject):
                 self._tracks_soon.start()
             n = len(d["found"])
             QTimer.singleShot(1500, lambda: self.toast.emit(
-                (f"Legenda em português ligada · " if pt else "") + f"{n} legenda{'s' if n > 1 else ''} na pasta do vídeo"))
+                ("Legenda em português ligada · " if pt else "") + f"{n} legenda{'s' if n > 1 else ''} na pasta do vídeo"))
         self.stateChanged.emit()
 
     @staticmethod
@@ -1096,12 +1095,16 @@ def _start_library():
 def main():
     setup_log()
     # o instalador chama estas duas, sem janela
-    if "--registrar" in sys.argv or "--desregistrar" in sys.argv:
+    if "--registrar" in sys.argv or "--desregistrar" in sys.argv or "--apagar-dados" in sys.argv:
         import winsetup
         if "--registrar" in sys.argv:
             winsetup.register_all(Path(sys.executable))
-        else:
+        elif "--desregistrar" in sys.argv:
             winsetup.unregister()
+        else:
+            logging.shutdown()  # o registro fica dentro da pasta que vai ser apagada
+            winsetup.wipe_data()
+            return
         log.info("onVLC %s no Windows", "registrado" if "--registrar" in sys.argv else "desregistrado")
         return
     # a biblioteca (onvlc-biblioteca.exe) abre antes da janela, em paralelo: quando a tela pedir a lista, ela já responde

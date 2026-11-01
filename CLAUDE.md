@@ -1,43 +1,59 @@
-# onVLC — handoff
+# onVLC — guia para quem mexe no código
 
-Projeto pessoal do Lucas . Repositório privado: **github.com/llll94/onvlc** (branch `main`).
-Commits como `Lucas Schunck <148644814+llll94@users.noreply.github.com>` (já configurado no repo).
-O Lucas não programa: explicar em português simples, sem jargão; mostrar protótipo (Artifact) antes de codar ideias novas
-de tela; **para regerar o `.exe`, fechar o onVLC aberto antes** (`taskkill /IM onVLC.exe`, autorizado em 2026-10-31; fora isso, não matar o onVLC dele); não mexer no mouse dele; não ligar/usar a TV se ele estiver
-assistindo (conferir antes com `tools\tvjs.py`).
+Player de vídeo para Windows com o motor do VLC, uma biblioteca de filmes que roda no PC e um app para Android TV
+que toca os filmes do PC pela rede de casa. Código em português (nomes, comentários, mensagens).
 
-Última sessão: 2026-10-31 (refatoração em fases: plano `…\Claude Code\Plans\onvlc-refatoracao.md`). Histórico anterior:
-`C:\Users\lucas\Documents\Obsidian Vault\work\Claude Code\Plans\player-video-redesign.md`.
-O Lucas autorizou abrir e testar na TV sem chamá-lo (ele deixa o volume baixo); **não abrir janelas nem capturar a tela
-do PC** (ele pode estar jogando): para ver telas QML, renderizar fora da tela.
-Rede de casa (IPs, MACs, Mi Box): `…\Claude Code\Docs\Rede de casa.md`.
+Notas do mantenedor (rede de casa, aparelhos, histórico de sessões) ficam fora do repositório.
 
 ---
 
-## O que é
-
-Um player de vídeo próprio com o motor do VLC, em três partes:
+## As três partes
 
 1. **onVLC do PC** (`main.py` + `ui\Overlay.qml`): janela sem borda, python-vlc por baixo e uma camada QML transparente
-   por cima (linha do tempo com miniatura, menu lateral, legendas do OpenSubtitles, Assistir na TV).
-   A **biblioteca** (mesmo desenho da tela da TV, em QML próprio: `ui\Library.qml`) aparece dentro dele quando abre sem
-   vídeo, ou por Ctrl+B / menu Mídia › Biblioteca. Sem navegador embutido desde 2026-10-31 (pacote 587 → 111 MB).
-2. **Biblioteca** (`server\`, **em Go**, `onvlc-biblioteca.exe` ~8 MB, ~19 MB de RAM): processo separado, sem janela
-   (ícone na bandeja), que lê a pasta **`C:\Users\lucas\Videos\onVLC`** (vigiada pelo Windows, `ReadDirectoryChangesW`,
-   + conferência a cada 10 min), busca dados no TMDB e serve tudo na porta **8780** para a TV e para o PC.
-   Substituiu o `library.py` em 2026-10-31 com os mesmos arquivos de dados e as mesmas rotas.
-   **Sempre no ar enquanto o PC está ligado**: tarefa do Windows "onVLC biblioteca" (criada pelo `build.py`,
-   `start_with_windows`) abre `dist\onVLC\onvlc-biblioteca.exe` no login, ao voltar da suspensão e a cada 1 min se tiver
-   fechado (testado: derrubada, volta em ≤1 min). O player continua abrindo só quando o Lucas quer. Erro grave da
-   biblioteca vai para o `biblioteca.log` (`debug.SetCrashOutput`).
-   **A TV liga o PC**: botão "Ligar o PC" (e uma vez sozinha ao abrir o app, se o PC não responder) manda Wake-on-LAN
-   para o MAC que a biblioteca informa no `/api/hello` (`PcFinder.wake`). Testado com o PC em suspensão; desligado
-   depende da BIOS (placa Realtek já com "Wake on Magic Packet" e "Shutdown WOL" ligados) e do login do Windows.
-3. **App da Mi Box** (`android\`, pacote `com.lucas.tvcache`, nome "onVLC"): tela inicial da TV com a biblioteca (página
-   `tvui\` num WebView) e **player próprio com libVLC 3.7.7** (sem usar o app do VLC). Inclui o cache em blocos (TV Cache).
+   por cima (linha do tempo com miniatura, menu lateral, legendas do OpenSubtitles, Assistir na TV). A **biblioteca**
+   (`ui\Library.qml`, o mesmo desenho da tela da TV) aparece quando abre sem vídeo ou por Ctrl+B. O assistente
+   **Configurar a TV** (`ui\Setup.qml` + `tvsetup.py`) acha a TV, pareia, instala o app nela e testa.
+2. **Biblioteca** (`server\`, em Go, `onvlc-biblioteca.exe`): processo separado, sem janela (ícone na bandeja), que lê a
+   pasta `Vídeos\onVLC` (vigiada pelo Windows) e busca capas no TMDB. Serve a TV e o PC na porta **8780**. Uma tarefa
+   do Windows ("onVLC biblioteca") mantém ela aberta: no login, ao voltar da suspensão e a cada 1 min se tiver fechado.
+3. **App da TV** (`android\`, pacote **`app.onvlc.tv`**): tela inicial com a biblioteca (página `tvui\` num WebView) e
+   player próprio com libVLC. Cache em blocos (`CacheServer`) e "kits" de abertura para o filme começar rápido.
 
-Ícone: **"cone no ar"** (círculo laranja `#ff8a1f`, cone do VLC branco com ondas saindo da ponta), gerado por
-`tools\make_icon.py` (ico/png do PC, ícone e banner da Mi Box, `tvui\icon.svg`).
+---
+
+## Segurança (leia antes de mexer em rede, TV ou instalador)
+
+Revisão completa em 01/11/2026; o modelo de hoje:
+
+- **Chave da biblioteca.** Na primeira execução a biblioteca cria um segredo aleatório em
+  `%LOCALAPPDATA%\onVLC\library\secret` (só o usuário lê). Todo pedido exige `X-onVLC-Key: <segredo>`, menos
+  `/api/hello`, `/tv/*` e `/img/*` (`server\auth.go`). O player lê o arquivo (`library.key()`); a TV recebe o segredo
+  pelo assistente.
+- **A TV reconhece o PC.** `/api/hello?nonce=N` devolve `auth = HMAC-SHA256(segredo, "hello:"+N)`; a TV
+  (`PcFinder.hello`) só aceita um PC que acerte. Sem segredo guardado, a TV não aceita PC nenhum e pede para configurar.
+- **Só o adb manda na TV.** Pedidos do PC (onde ele está + chave, tocar, parar, teste) entram pela `PairActivity`, que
+  exige a permissão `DUMP` (só o shell do adb tem). Ela repassa à `LibraryActivity` com um token do processo; a
+  `LibraryActivity` (exportada por causa do lançador) ignora extras sem esse token. Não existe link `onvlc://`.
+  `PcFinder.use` só aceita IPv4 privado da mesma rede da TV.
+- **Host e origem.** A biblioteca recusa `Host` que não seja o IP por onde o pedido entrou, `localhost` ou o nome do PC
+  (contra DNS rebinding) e qualquer origem fora de loopback/rede privada. Rotas "só do PC" (`/api/media`,
+  `/api/thumbs?path=`, `/api/clients`, `GET /api/selftest/result`, `/api/reload-keys`) exigem também `127.0.0.1`.
+  Caminhos vindos do player: só absolutos com letra de unidade (`localPath`), nunca `\\servidor\...`.
+- **WebView da TV.** Só carrega `http://127.0.0.1:8090/<TOKEN>/...` (o `CacheServer`, com um token aleatório por
+  processo nas rotas); navegação e recursos de fora são bloqueados (`shouldOverrideUrlLoading` /
+  `shouldInterceptRequest`); CSP na `tvui\index.html`; depuração do WebView só na build `--debug`.
+- **Windows.** Programas do sistema sempre por caminho completo (`System32`); PowerShell elevado só com
+  `-EncodedCommand` e índice da placa (`tvsetup.run_elevated`); segredos só no Gerenciador de Credenciais (sem
+  fallback em texto puro); regra do firewall só TCP 8780, `remoteip=localsubnet`, perfil Particular.
+- **Assinatura do app da TV.** Chave **fora do repositório** (`%LOCALAPPDATA%\onVLC-dev\onvlc-tv.keystore`, senha no
+  Gerenciador de Credenciais `onVLC`/`apk_keystore_v2`), certificado SHA-256
+  `5a4de354aed556f11f200ce518e66b87fb4f86918ef2c47cc0ec6d48d074e0e4`. A chave anterior (pacote `com.lucas.tvcache`) vazou
+  e foi aposentada; o assistente desinstala o app antigo ao instalar o novo. **Perder a chave atual = as TVs não
+  aceitam mais atualização.** Guardar cópia fora do PC.
+- **Build.** ffmpeg e o AAR do libVLC conferidos por SHA-256; VLC e adb conferidos por assinatura digital (VideoLAN,
+  Google); dependências Python com hash (`requirements.txt`, `--require-hashes`).
+- Ainda **sem TLS** entre TV e PC (o segredo viaja em claro na rede de casa) e **sem assinatura de código** no instalador
+  (SmartScreen avisa). Ver `SECURITY.md`.
 
 ---
 
@@ -45,138 +61,57 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
 
 | Arquivo | O que faz |
 |---|---|
-| `main.py` | Player do PC (classe `Player`), slots chamados pelo QML; abre a biblioteca (`library.start_detached()`) numa thread antes da janela. Estado por **avisos do VLC** (`_on_vlc`: Playing/Paused/EndReached/LengthChanged/ES*), não por polling: o `tick` (250 ms) só lê a posição com vídeo tocando e janela à vista e emite `posChanged` (propriedade `pos`), sem mandar o estado inteiro; `_changed()` manda o estado quando algo muda. `libraryOpenVideo(path, pos)`. **Legendas e miniaturas vêm da biblioteca** (`_fetch_media` → `/api/media`, `_fetch_thumbs` → `/api/thumbs?path=`): mesmas legendas e nomes da TV, a em português entra ligada; VLC com `--no-sub-autodetect-file`. Biblioteca fora: volta ao `_find_subs` e ao `thumbs.py` locais. Avisos do Qt/QML vão para o `onvlc.log` |
-| `ui\Overlay.qml` | Toda a interface do PC; `libraryOpen` + `Loader` do `Library.qml` (só existe aberta); a linha do tempo usa `player.pos`; menu montado uma vez (`menuList`) |
-| `ui\Library.qml` | Biblioteca do PC: canvas 1920×1080 escalado com as medidas do `tvui\style.css`; lê `/api/library` com ETag a cada 30 s (só aberta); 3 fileiras, destaque ao passar o mouse (sem rolar a fileira), rodinha troca de fileira, setas ‹ › / Shift+rodinha andam na fileira, página do filme/série/indisponível com "‹ Voltar" (e botão voltar do mouse/Esc); imagens decodificadas no tamanho do card, cantos arredondados por `MultiEffect` (só com placa de vídeo; sem ela ficam retos); arrastar move a janela. Para ver sem abrir janela: `QT_QPA_PLATFORM=offscreen` + `QT_QPA_FONTDIR=C:\Windows\Fonts` + `grabWindow()` (a fonte variável do Windows sai errada nesse modo; usar "Segoe UI" só na prévia) |
-| `server\*.go` | Biblioteca em Go: `names.go` (nome do arquivo, legendas, idioma), `probe.go` (ffprobe/ffmpeg), `tmdb.go` (TMDB pt-BR, nova tentativa com espera crescente, chave lida do Gerenciador de Credenciais), `library.go` (índice, varredura, regras `isEnd`/`resumeAt`, assistidos), `listing.go` (`/api/library`), `positions.go` (posições no registro, mesmo lugar do player), `thumbs.go`, `watch.go` (vigia da pasta), `http.go` (rotas), `main.go` (porta exclusiva, bandeja), `setup.go` (rotas do assistente: `/api/clients`, `/api/reload-keys`, `/api/selftest` = vídeo de teste gerado uma vez pelo ffmpeg em `library\selftest.mp4`, `/api/speed`, `/api/selftest/result`). `ONVLC_PORT` muda a porta (testes) |
-| `library.py` | Lado do player: `LIB_DIR`, `is_sample`, `running()`, `start_detached()` (abre o `onvlc-biblioteca.exe`) |
-| `tvfolder.py` | Painel "Pasta onVLC" do PC: lista com nome da TV e estado; "Mandar para a TV" = hardlink na pasta (mesmo disco) ou cópia; lixeira; `find_tool` (ffmpeg); `VIDEO_EXTS` |
-| `tvstream.py` | **Assistir na TV** (do PC): `TVBox` = a TV salva em `tvs.json` (lida na hora de usar); adb (`find_adb`: o da pasta `adb\` ao lado do `.exe`, senão o do PC), Wake-on-LAN, liga a tela por HDMI-CEC (e pela rede se a TV salva tiver `display`, a LG), se o IP mudou acha de novo (`tvdevices.relocate`); `open_library(id, pos)` / `stop_library()` = `am start` no `LibraryActivity` com extras `play`/`pos` ou `stop` |
-| `tvdevices.py` | TVs ligadas ao PC: `%LOCALAPPDATA%\onVLC\tvs.json` (`load`/`default`/`save`/`remove`; id = MAC do Bluetooth, que a TV anuncia e não muda); `discover()` acha Android TVs na rede pelo mDNS (`_androidtvremote2` = aceita controle remoto, `_googlecast` = nome dado pela pessoa e modelo, `_adb` = depuração ligada) + MAC pela tabela ARP; `Remote` = controle remoto do protocolo do app Google TV (`androidtvremote2`, porta 6466): `connect` (levanta `NeedsPairing`), `start_pairing`/`finish_pairing(código)`, `key("HOME")`, `open_link(url)`, `info()` (fabricante, modelo, app na frente). Certificado do pareamento em `%LOCALAPPDATA%\onVLC\remote\` |
-| `tvsetup.py` + `ui\Setup.qml` | **Assistente "Configurar a TV"** (protótipo aprovado em 01/11: https://claude.ai/artifact/XahXNYvcyDC57Noey4ZsFL). Objeto `setup` no QML, estado em `setup.st`, cada etapa numa thread (`_bg`; trocar de etapa cancela). Etapas: 0 início · 1 achar (`tvdevices.discover` em loop) · 2 código (`Remote.start_pairing/finish_pairing`; já pareada pula) · 3 instalar (porta 5555 fechada = passo a passo: `SETTINGS`+OK, "Apertar 7 vezes" = 7× `DPAD_CENTER`, espera a porta abrir, `adb connect` até "device"; instala com `adb push` para `/data/local/tmp` (progresso = tamanho que já chegou, por `stat`) + `pm install -r` (o `exec-in` não devolve o "Success"); não reinstala se a TV já tem versão igual ou maior) · 4 conectar (`am start … --es pc http://IP:8780`, confirma por `/api/clients`) · 5 teste (ping da TV ao PC, `--ez selftest true`, lê `/api/selftest/result`; Wake-on-LAN da placa pelo PowerShell, "Ligar para mim" pede administrador) · 6 TMDB (token de leitura, testado em `/3/configuration`, `/api/reload-keys`) · 7 OpenSubtitles (login; precisa da chave de app: `opensubs.APP_KEY` ou a do Lucas no keyring) · 8 pronto. Abre sozinho na 1ª vez sem TV (`setupDismissed`), no menu TV → Configurar, e no "Assistir na TV" sem TV |
-| `thumbs.py` | Miniaturas no PC só quando a biblioteca está fora (normalmente é o `server\thumbs.go`, até 3 vídeos ao mesmo tempo) |
-| `opensubs.py` | Legendas do OpenSubtitles (falta o Lucas criar conta/chave) |
-| `tvui\index.html`, `app.js`, `style.css` | Página da biblioteca (1920×1080 escalada; sem filtros/máscaras/sombras animadas no CSS; capas `loading=lazy`; a cada 30 s pede `api/state` e só baixa a lista inteira quando muda; destaque não recria o logo). Tela inicial sem abas, só 3 linhas: Continuar assistindo / Mídias (tudo, mais novo primeiro) / Vocês já assistiram (montada uma vez e reaproveitada); sem favoritos. Página do filme/série, indisponível, procurando PC. Modo PC com `?pc=1` |
-| `tvui\player.js` | Interface do player da TV (barra única com trecho guardado, miniatura ao procurar, painel áudio/legendas com rolagem, tela de espera do pausado — qualquer botão tira, volta após 10 s parado (`plPausedLong`), próximo episódio, nova tentativa se travar) |
-| `android\src\…\LibraryActivity.java` | Atividade da tela inicial: WebView transparente + `VideoPlayer` atrás; ponte JS `window.onvlc` (play, prepare, unprepare, toggle, seek, audio, spu, stop, warm, post) |
-| `VideoPlayer.java` | libVLC (iniciado em segundo plano quando o app abre): SurfaceView vídeo + legenda, `:network-caching=400`, `:prefetch-read-size=262144`, `:prefetch-buffer-size=4096`, `:start-paused` para preparar, legendas externas como slave; busca rápida (quadro-chave); avisa a página só quando o "carregando" começa/termina; lista de faixas só refeita nos eventos ES* |
-| `CacheServer.java` | Servidor local 127.0.0.1:8090: `/stream` (blocos de 8 MB, 5 min à frente, 1 min atrás, 2 GB de vários filmes; bloco ainda chegando já é entregue conforme chega, `partial`), **kit de abertura** (até 4 GB, fixado), `/ui/*` (repassa a página e a API para o PC e guarda cópia para quando o PC está desligado; imagens com cache longo), `/status` |
-| `PcFinder.java` | Acha o PC: último IP salvo, senão varre x.x.x.1–254 na porta 8780 (`/api/hello`, guarda o MAC); `wake()` = Wake-on-LAN |
-| `SelfTest.java` | Modo teste: o que a TV aceita (4K pelos modos da tela, HDR10/DV/HLG, canais pelo HDMI), velocidade baixando `/api/speed`, POST `/api/selftest/result`. A `LibraryActivity` esconde a página e toca `/api/selftest` 10 s contando travadas. Também recebe o extra `pc` (`PcFinder.use`: usa o endereço sem varrer) e o link `onvlc://abrir?pc=…&selftest=1` |
-| `Progress.java` | POST da posição para o PC |
-| `CacheService.java` | Serviço em primeiro plano durante o filme |
-| `winsetup.py` | O onVLC no Windows: `register_app` ("Abrir com"/app de vídeo, ProgID `PlayerLucas.Video`), `start_with_windows` (tarefa "onVLC biblioteca": login, volta da suspensão, a cada 1 min, IgnoreNew), `register_all`/`unregister`, `stop_task`/`resume_task`. Usado pelo `build.py` e pelo `onVLC.exe --registrar` / `--desregistrar` (o instalador chama; sai sem abrir janela) |
-| `tools\build_installer.py` + `tools\onVLC.iss` | **Instalador** `dist\instalar-onVLC.exe` (Inno Setup, grátis, instalado com `winget install JRSoftware.InnoSetup --scope user`): gera o APK e o pacote (`build.py --sem-registrar`) e compila. Instala só para o usuário em `%LOCALAPPDATA%\Programs\onVLC` (sem administrador), atalho no Iniciar (e na Área de Trabalho, opcional), roda `--registrar`; tarefa "Liberar a TV no firewall" = regra `netsh` para o `onvlc-biblioteca.exe` na rede privada (pede UAC). Antes de instalar/desinstalar fecha biblioteca e player. Desinstalar tira tarefa, registro, atalho e regra; dados em `%LOCALAPPDATA%\onVLC` ficam. Versão `1.0.<commits>`. **124 MB** (instalado 483 MB, metade é o ffmpeg). Testar sempre pelo **PowerShell** (`/VERYSILENT /DIR=... /TASKS=""`): no Git Bash as opções `/X` viram caminhos e o instalador abre na tela |
-| `tools\build.py` | Compila a biblioteca em Go e gera `dist\onVLC\onVLC.exe` (PyInstaller) com o `onvlc-biblioteca.exe` ao lado e **tudo dentro**: `vlc\` (libvlc + plugins do VLC instalado, sem gui/control/stream_out/mux/visualization/video_splitter, `plugins.dat` refeito; o `main.py` usa esse quando é o .exe), `ffmpeg\` (essentials 9.0.2, SHA-256 conferido, cache em `build\ffmpeg`; `find_tool`/`findTool` olham essa pasta primeiro), `adb\`, `tv\` (APK + `tv.json` com a versão); `--sem-registrar` só gera; `trim()` apaga do pacote o Qt que não é usado (3D, gráficos, mapas, multimídia, PDF, WebEngine, traduções fora pt-BR, `opengl32sw`): **~138 MB** com o adb (pasta `adb\`, copiado do `winget install Google.PlatformTools` para ser da mesma versão) e as bibliotecas da TV (`zeroconf`, `androidtvremote2`); atalhos, registro como app de vídeo |
-| `tools\build_tvcache.py` | APK sem Gradle (javac → d8 → aapt2 → zipalign -p → apksigner), baixa o AAR do libVLC uma vez em `build\libvlc` (SHA-256 conferido), só `armeabi-v7a`, `.so` sem compressão + `extractNativeLibs=false` (APK 40,6 MB, nada extraído ao instalar), chave em `%LOCALAPPDATA%\onVLC`; instala na Mi Box (`--no-install` para só gerar; com a Mi Box dormindo, mandar WOL em loop durante o `adb install`) |
-| `tools\tvjs.py` | Roda JS na página aberta na TV pelo adb (depuração do WebView): `python tools\tvjs.py "expressão"` |
-| `tools\make_icon.py`, `set_tmdb_key.py` | Ícone; guardar chave do TMDB |
+| `main.py` | Player do PC (classe `Player`); estado por avisos do VLC; legendas e miniaturas vêm da biblioteca (`/api/media`, `/api/thumbs?path=`); `--registrar` / `--desregistrar` / `--apagar-dados` (o instalador chama, sem janela) |
+| `ui\Overlay.qml`, `ui\Library.qml`, `ui\Setup.qml` | Interface do player, biblioteca do PC (pede `/api/library` com `X-onVLC-Key` via `player.libraryKey()`), assistente |
+| `library.py` | Lado do player: `LIB_DIR`, `key()`, `request()`/`get_json()` (pedidos com a chave), `start_detached()` |
+| `tvsetup.py` | Assistente: achar (`tvdevices.discover`), código (controle remoto), instalar (`adb push` + `pm install -r --user current`, com progresso; tira o pacote antigo), conectar (`PairActivity` com `--es pc … --es key …`), teste (ping, `--ez selftest true`, Wake-on-LAN, aviso de rede Pública), TMDB, OpenSubtitles |
+| `tvdevices.py` | TVs salvas em `%LOCALAPPDATA%\onVLC\tvs.json`; descoberta por mDNS + ARP; `Remote` = protocolo do controle remoto do Google TV (`androidtvremote2`), certificado em `%LOCALAPPDATA%\onVLC\remote\` |
+| `tvstream.py` | `TVBox`: adb (o de dentro do pacote), Wake-on-LAN, HDMI-CEC, `open_library`/`stop_library` pela `PairActivity`; `close()` fecha o servidor do adb |
+| `winsetup.py` | "Abrir com", tarefa da biblioteca (XML escapado), `unregister`, `wipe_data` |
+| `tvfolder.py`, `thumbs.py`, `opensubs.py` | Painel "Pasta onVLC"; miniaturas locais (biblioteca fora); OpenSubtitles (link de download só `https`) |
+| `server\auth.go` | Segredo, HMAC, `hostOK`, `privateSource`, `localPath`, log rotativo |
+| `server\http.go`, `setup.go` | Rotas (ver abaixo); assistente (`/api/clients`, `/api/reload-keys`, `/api/selftest`, `/api/speed`, `/api/selftest/result`) |
+| `server\library.go`, `listing.go`, `names.go`, `probe.go`, `thumbs.go`, `tmdb.go`, `positions.go`, `watch.go`, `main.go` | Índice e varredura, listagem (caminhos só para o PC), legendas (só arquivos comuns), ffprobe (`-i`), miniaturas, TMDB (token atômico, nomes de imagem validados), posições no registro, vigia da pasta, porta exclusiva + limite de 64 conexões |
+| `tvui\` | Página da biblioteca e do player da TV (texto sempre por `esc()`) |
+| `android\src\app\onvlc\tv\` | `LibraryActivity` (WebView + ponte `window.onvlc`), `PairActivity`, `PcFinder`, `CacheServer`, `VideoPlayer`, `SelfTest`, `Progress`, `CacheService` (`mediaPlayback`) |
+| `tools\build.py` | Gera `dist\onVLC\` com tudo dentro: biblioteca, `vlc\` (do VLC instalado ou de `build\vlc`), `ffmpeg\`, `adb\`, `tv\` (APK), `LICENSE`, `THIRD_PARTY.md`; `--sem-registrar` só gera |
+| `tools\build_tvcache.py` | APK sem Gradle (javac → d8 → aapt2 → zipalign → apksigner); `--debug` liga a depuração do WebView; `--no-install` só gera |
+| `tools\build_installer.py` + `tools\onVLC.iss` | `dist\instalar-onVLC.exe` (Inno Setup): por usuário por padrão ou "para todos" (Arquivos de Programas); firewall estreito; desinstalar pergunta se apaga os dados |
+| `tools\release.py` | Release no GitHub (rascunho por padrão) com instalador, APK e `SHA256SUMS.txt`; confere o certificado do APK |
+| `tools\tvjs.py` | Roda JS na página da TV (só com a build `--debug`) |
 
 ## API da biblioteca (porta 8780)
 
-`GET /api/hello` (version 2 = Go; `mac` da placa por onde o pedido chegou) · `GET /api/library` (filmes, séries, `continue`, `history`, `busy`, `tmdb`, `version`; ETag/304, gzip;
-cada vídeo tem `id, path, file, size, dur, pos, bps, quality, audio, subs, extSubs, watched, broken…`) ·
-`GET /api/state` (pequeno: `version`, `busy`, `continue`, `pos` por id, `history` recente) ·
-`GET /api/media?path=` (só 127.0.0.1: posição, `resume`, legendas de qualquer arquivo) ·
-`GET /api/thumbs/<id>` (começa as miniaturas) · `GET /api/thumbs?path=&dur=` (só 127.0.0.1: de qualquer arquivo, `{id,n,have}`) · `GET /img/<arquivo>`, `/img/thumb_<id>_<n>.jpg` · `GET /sub/<id>/<n>` ·
-`GET /v/<id>/<tamanho>/<nome>` (vídeo com Range) · `GET /tv/*` (página; `/tv/api/*` e `/tv/img/*` também valem) ·
-`POST /api/progress {id,pos,dur}` · `POST /api/watched {id|path}`.
+Todas exigem `X-onVLC-Key`, menos as marcadas *aberta*.
+
+`GET /api/hello[?nonce=]` *aberta* (nome do PC, MAC, `auth`) · `GET /api/library` (sem `path`/`folder` para quem não é o
+PC) · `GET /api/state` · `GET /api/media?path=` (PC) · `GET /api/thumbs/<id>` · `GET /api/thumbs?path=&dur=` (PC) ·
+`GET /img/<arquivo>` *aberta* · `GET /sub/<id>/<n>` (só arquivo comum, até 10 MB) · `GET /v/<id>/<tamanho>/<nome>` (Range) ·
+`GET /tv/*` *aberta* (`/tv/api/*`, `/tv/img/*`, `/tv/sub/*` também) · `POST /api/progress {id,pos,dur}` ·
+`POST /api/watched {id|path}` · assistente: `GET /api/clients` (PC), `POST /api/reload-keys` (PC), `GET /api/selftest`,
+`GET /api/speed?mb=`, `POST /api/selftest/result` (campos fixos), `GET /api/selftest/result` (PC).
 
 ## Dados
 
-- `%LOCALAPPDATA%\onVLC\`: `onvlc.log` (player), `biblioteca.log`, `library\index.json`, `library\img\`,
-  `library\assistidos.json`, `thumbs\<md5>\`, `tvcache.keystore` (chave do APK; senha em credenciais `onVLC`/`apk_keystore`).
-- Posição de cada vídeo: QSettings `PlayerLucas/Player`, `pos/<md5(caminho em minúsculas)>` e `posAt/…` (a mesma no PC e na TV).
-- Chaves no Gerenciador de Credenciais, serviço `onVLC`: `tmdb_token` (TMDB v4, já guardado), `api_key`/senha do OpenSubtitles (ainda não).
-- "Assistido" = chegou nos últimos 6% ou 2 min. Itens que saem da pasta continuam em assistidos como "indisponível".
+- `%LOCALAPPDATA%\onVLC\`: `onvlc.log`, `biblioteca.log` (1 MB, trocado em execução), `library\` (`index.json`,
+  `assistidos.json`, `img\`, `secret`, `selftest.mp4`), `thumbs\`, `tvs.json`, `remote\`.
+- Posições: registro `HKCU\Software\PlayerLucas\Player` (`pos/<md5>`, `posAt/…`), as mesmas no PC e na TV.
+- Credenciais (serviço `onVLC`): `tmdb_token`, `api_key`/`password` (OpenSubtitles).
+- "Assistido" = chegou nos últimos 6% ou 2 min.
 
-## Casa e Mi Box
+## Como gerar e testar
 
-- PC 192.168.1.69 (cabo; MAC `AA-BB-CC-00-00-04`, Realtek 2.5GbE; suspensão S3 acorda pela rede). Mi Box `192.168.1.31` (MiTV-AFMU0, Android 14, armeabi-v7a, MAC `AA-BB-CC-00-00-01`),
-  adb `192.168.1.31:5555` autorizado. TV LG C1 4K `192.168.1.13` (porta 3000 só com ela ligada). Mi Box desenha em 1920×1080.
-- **A Mi Box está salva em `tvs.json`** como "Sala" (Xiaomi MiTV-AFMU0, MAC Bluetooth `AA-BB-CC-00-00-02`), com a
-  LG em `display`; o PC já está pareado como controle remoto dela ("onVLC no LUCAS-PC"). Nada de IP fixo no código.
-- **Antes de testar, ver se ela já está acordada** (porta 5555 aberta ou app na frente): se estiver, não mexer; só mandar
-  dormir no fim se estava dormindo (em 01/11 um teste mandou dormir com o YouTube na frente).
-- `tvstream.TVBox().connect()` acorda pela rede (WOL repetido); `KEYCODE_WAKEUP` liga a TV via HDMI-CEC mas **traz a tela
-  inicial do Google TV para frente** (o app fica congelado em segundo plano). Para abrir o app use só `am start -n com.lucas.tvcache/.LibraryActivity`.
-- **Low Power Standby desligado** (`settings put global low_power_standby_enabled 0`): antes cortava o Wi-Fi 5 s depois
-  de dormir e o WOL falhava. Testado: acorda em ~4 s com a TV desligada. Para instalar APK com ela dormindo, mandar WOL
-  em loop enquanto instala.
-- Firewall: liberado pelo Lucas para o programa (onVLC.exe, python e `server\onvlc-biblioteca.exe`), qualquer porta.
-  A regra é por caminho: o `dist\onVLC\onvlc-biblioteca.exe` pede liberação na primeira vez que abrir. Não mexer em firewall (o
-  classificador bloqueia e o Lucas faz pelo `firewall.cpl`).
-- Syncthing: pasta antiga `tv-videos` (`Vídeos\TV` → Mi Box `Movies/TV`) está **pausada** (não apagada).
+- `python -m pip install --require-hashes -r requirements.txt` (Python 3.12). Go 1.27. JDK 17 + Android SDK (build-tools 34).
+- Pacote do PC: `python tools\build.py` (pausa a tarefa, fecha biblioteca e player, refaz atalhos e registro).
+  Instalador: `python tools\build_installer.py`. Release: `python tools\release.py [--testar | --publicar]`.
+- App da TV: `python tools\build_tvcache.py [--debug] [--no-install]`.
+- Biblioteca lado a lado para testes: `ONVLC_PORT=8781 LOCALAPPDATA=<pasta> ONVLC_LIBRARY=<pasta> onvlc-biblioteca.exe`.
+- Instalador em silêncio: pelo **PowerShell** (`/VERYSILENT /DIR=... /TASKS=""`); no Git Bash as opções `/X` viram caminhos.
+- Telas QML sem abrir janela: `QT_QPA_PLATFORM=offscreen` + `QT_QPA_FONTDIR=C:\Windows\Fonts` + `grabWindow()`.
+- Antes de qualquer teste na TV: conferir se ela já está em uso (porta 5555 aberta / app na frente) e não mexer se estiver.
 
-## Como testar
+## Pendências
 
-- **Quem roda de verdade é a cópia de `dist\onVLC`** (biblioteca + `_internal\tvui`). Mudou `server\` ou `tvui\`? Gerar o
-  pacote de novo (`python tools\build.py`: ele mesmo pausa a tarefa, fecha biblioteca e onVLC e religa tudo no fim —
-  sem pausar a tarefa, ela reabre a biblioteca no meio e o build quebra a pasta `dist`) e recarregar a TV — senão a TV guarda a página antiga
-  (aconteceu em 2026-10-31: o botão "Ligar o PC" sumiu porque a biblioteca de `dist` estava desatualizada).
-- PC sem empacotar: `python main.py [arquivo]`. Biblioteca: `cd server && go build -ldflags "-H windowsgui -s -w" -o onvlc-biblioteca.exe .`
-  (Go em `C:\Program Files\Go\bin`), depois `python -c "import library; library.start_detached()"`; para reiniciar,
-  `taskkill /IM onvlc-biblioteca.exe /F`. Teste lado a lado: `ONVLC_PORT=8781` + `LOCALAPPDATA` apontando para uma cópia dos dados.
-- TV: `python tools\build_tvcache.py` (gera e instala). Mudanças só em `tvui\` **não precisam de APK** (a página vem do PC;
-  recarregar com `tools\tvjs.py "location.reload()"`).
-- Capturar a tela da TV: `adb -s 192.168.1.31:5555 shell screencap -p /sdcard/s.png` + `pull`. Se aparecer o descanso
-  de tela, mandar `input keyevent KEYCODE_SHIFT_LEFT`.
-- Medir abertura: abrir com `openPlayer(it, ms)` via tvjs e acompanhar `PL.st.state/time`.
-
-## Números medidos (Homem-Aranha 4K HDR, 20 GB, Mi Box)
-
-2026-10-31, depois da refatoração: abertura direta **3,7 s** (antes 5,4); preparada **0,34 s** (antes 0,6); pulo de +10 s volta a tocar em **0,3 s**;
-pulo para trecho não guardado (50–110 min) volta a tocar em **0,2–0,9 s**;
-app abre na TV em 1,5 s; biblioteca (Go) ~19 MB de RAM; app do PC 111 MB (antes 587).
-
-Abertura direta ~5 s (2,9 s é o libVLC lendo o índice/Cues do MKV no processador da Mi Box; o buffer de 16 MB por pedido
-foi cortado). Com a página do filme aberta (pré-preparo pausado): 6 s na página → **0,6 s**; 3 s → 2,1 s.
-Wi-Fi PC→Mi Box ~250 Mbps. Miniaturas: 200 em ~35 s no 4K. Kit de abertura: 664 MB para 4 filmes.
-
-## Estado em 2026-11-01
-
-- Assistente testado de verdade na Mi Box (sem janela, chamando o `tvsetup.Setup` por script): achou a Sala em 4 s,
-  já pareada (pulou o código), instalou o app pela rede em 5 s, conectou (a TV pediu à biblioteca 4 s depois de abrir) e
-  o teste deu: 3 ms, 168 Mb/s, tocou 9,5 s sem travar, 4K + HDR10 + Dolby Vision + HLG, 8 canais (7.1), Wake-on-LAN ok
-  (placa "Ethernet 2"). As telas foram vistas só fora da tela (offscreen); falta o Lucas clicar nelas de verdade.
-- **Sem Play Store** (o Lucas não quer pagar nada): o PC faz o papel da loja. No "Assistir na TV", se o app da TV for mais
-  velho que o do pacote, o PC atualiza antes de abrir (etapa "Atualizando o onVLC da TV", `tvsetup.install_apk`).
-- Instalador testado neste PC numa pasta de teste (instalou em 14 s, biblioteca rodando de lá, desinstalou limpo) e o
-  VLC de dentro do pacote tocou 4K HDR/HEVC/x264 igual ao instalado. Depois o `build.py` devolveu tudo para `dist\onVLC`.
-- **Teste de usuário do Lucas (01/11), pelo instalador, com o app da TV desinstalado:** deu certo depois de 3 correções:
-  1ª abertura do player na TV leva ~35 s (o motor monta a lista de fontes) e o teste desistia em 30 s; a pergunta
-  "viu e ouviu" nunca aparecia (`None` do Python vira `undefined` no QML); a pergunta "Permitir depuração USB?" só aparece
-  ao abrir a conexão (agora reabre a cada 12 s e acorda a tela); a Mi Box tem 2 usuários (dono e `new_user`) e desinstalar
-  tira só do atual, então `tv_app_version` confere `pm list packages --user current` e instala com `--user current`.
-- O PC do Lucas agora usa o onVLC **instalado** (`%LOCALAPPDATA%\Programs\onVLC`), não o `dist`. Backups dos testes em
-  `%LOCALAPPDATA%\onVLCackup-teste*-2026-11-01`. O VLC foi desinstalado do PC: o build usa o motor guardado em `buildlc`.
-- Próximo: o Lucas vai testar na casa da mãe (outro PC e outra TV).
-- O instalador ainda não foi publicado em lugar nenhum (fica em `dist\instalar-onVLC.exe`; o repositório é privado).
-- Ainda não testado: o passo a passo da depuração (a Mi Box já tem ligada), o erro de código, TMDB/OpenSubtitles pelas telas.
-
-## Estado em 2026-10-31 (fim da sessão)
-
-- As 4 fases do plano `onvlc-refatoracao.md` estão no GitHub. APK novo instalado na Mi Box (versão = 100 + nº de commits,
-  para o Google TV atualizar ícone/banner); `.exe` novo em `dist\onVLC`.
-- Se a TV mostra "PC desligado" com o PC ligado, conferir se a biblioteca está rodando (`/api/hello`).
-- Observar: num teste logo depois de instalar o APK a página sumiu do `tvjs.py` depois do primeiro pulo (sem falha no
-  logcat, processo vivo na repetição); não se repetiu. `CacheService` continua `dataSync`.
-- No "Continuar assistindo" só ficou Devoradores de Estrelas (10:24), que não veio dos testes.
-
-## Estado em 2026-10-30
-
-- Biblioteca com: Devoradores de Estrelas (Project Hail Mary, 4K HDR, PT-BR embutida), Homem-Aranha: De Volta ao Lar
-  (4K HDR, PT-BR em .srt), Homem-Aranha: Um Novo Dia (1080p, várias .srt). **Harriet** foi movido de propósito para
-  `C:\Users\lucas\Videos\` (com o `.pt-BR.srt`) para testar o card "indisponível"; está em "assistidos" (30/10).
-- O processo da biblioteca rodando agora é a versão de desenvolvimento (`pythonw main.py --biblioteca`); depois de
-  reiniciar o PC, quem abre é o `onVLC.exe`.
-- Depuração do WebView ligada (necessária para o `tvjs.py`). O registro de teclas e o `KEYLOG` saíram em 2026-10-31.
-
-## Pendências e ideias
-
-- Lucas: criar conta/chave do OpenSubtitles (legendas da internet no PC).
-- Testar séries de verdade (só testadas com episódios falsos) e o próximo episódio automático.
-- Reservar IP fixo da Mi Box no roteador.
-- Decidir se apaga a pasta `tv-videos` do Syncthing de vez.
-- 2026-10-31: capítulos tirados do PC e da TV (o Lucas achou ruins); aviso "Mouse embaixo…" do PC tirado; favoritos tirados só da tela
-  (`/api/favorite` e `favoritos.json` continuam na biblioteca, sem uso). Falta testar e gerar o APK.
+- TLS (ou ao menos cifrar) entre TV e PC.
+- Legendas automáticas no Go (hoje o OpenSubtitles é só no player do PC); chave de app sem embutir no binário.
+- Testar o passo a passo "Build 7 vezes" numa TV com a depuração desligada.

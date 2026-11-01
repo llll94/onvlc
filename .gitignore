@@ -6,3 +6,10 @@ dist/
 *.keystore
 server/*.exe
 server/*.exe~
+*.jks
+*.pem
+*.p12
+*.pfx
+*.key
+.env
+requirements.lock

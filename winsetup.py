@@ -141,6 +141,26 @@ def register_all(exe):
     run_task()
 
 
+def wipe_data():
+    r""""Apagar meus dados" do desinstalador: o que o onVLC guardou neste PC. Nunca toca nos filmes (Vídeos\onVLC).
+    Apaga %LOCALAPPDATA%\onVLC (posições da biblioteca, capas, miniaturas, TV salva, pareamento com a TV, chave da
+    biblioteca, registros), as senhas no Gerenciador de Credenciais e as configurações do player no registro."""
+    import shutil
+    data = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "onVLC"
+    if data.name == "onVLC" and data.is_dir():
+        shutil.rmtree(data, ignore_errors=True)
+    try:
+        import keyring
+        for name in ("tmdb_token", "password", "api_key"):
+            try:
+                keyring.delete_password("onVLC", name)
+            except Exception:
+                pass
+    except ImportError:
+        pass
+    delete_tree(r"Software\PlayerLucas\Player")  # volume, recentes, posições do player
+
+
 def unregister():
     """O contrário do register_all (o desinstalador chama). Filmes, posições e a pasta Vídeos\\onVLC ficam."""
     subprocess.run([SCHTASKS, "/Delete", "/TN", TASK, "/F"], capture_output=True, creationflags=NO_WINDOW)

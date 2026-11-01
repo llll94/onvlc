@@ -238,7 +238,7 @@ class Setup(QObject):
             return ""
 
     def _os_app_key(self):
-        """A chave de app do OpenSubtitles: a do onVLC (quando existir) ou a que o Lucas guardou."""
+        """A chave de app do OpenSubtitles: a do onVLC (quando existir) ou a que a pessoa guardou."""
         return getattr(opensubs, "APP_KEY", "") or self._key("api_key")
 
     # ---------- navegação ----------

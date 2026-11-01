@@ -6,7 +6,7 @@ Cada TV salva tem:
   mac                     — do Wi-Fi/cabo, para acordar pela rede (Wake-on-LAN)
   bt                      — o MAC do Bluetooth que ela anuncia na rede; não muda, serve para reconhecer a TV
   display (opcional)      — a tela ligada nela por HDMI, quando dá para saber pela rede se está ligada:
-                            {"name": "LG C1", "ip": ..., "mac": ..., "port": 3000}
+                            {"name": "TV da sala", "ip": ..., "mac": ..., "port": 3000}
 
 O controle remoto é o mesmo protocolo do app "Google TV" do celular (porta 6466): pareia uma vez com um código que
 a TV mostra; depois o PC aperta botões, abre links e sabe qual app está na frente.

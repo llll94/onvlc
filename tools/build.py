@@ -30,6 +30,18 @@ FFMPEG_ZIP = f"https://github.com/GyanD/codexffmpeg/releases/download/{FFMPEG_VE
 FFMPEG_SHA256 = "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba"
 
 
+def check_signature(path, subject):
+    """O arquivo tem assinatura digital válida de quem deveria (VideoLAN, Google)? Para o build se não tiver:
+    um VLC ou adb trocado no PC iria parar dentro do instalador de todo mundo."""
+    ps = (f"$s = Get-AuthenticodeSignature -LiteralPath '{str(path).replace(chr(39), chr(39) * 2)}'; "
+          "\"$($s.Status)|$($s.SignerCertificate.Subject)\"")
+    exe = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    out = subprocess.run([str(exe), "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True).stdout.strip()
+    status, _, who = out.partition("|")
+    if status != "Valid" or f"CN={subject}," not in who + ",":
+        sys.exit(f"assinatura digital inválida em {path}: {out or 'sem resposta'} (esperado: {subject})")
+
+
 def remove_old_name():
     """Tira o que ficou do tempo em que o app se chamava "VLC"."""
     import winreg
@@ -108,6 +120,8 @@ def copy_vlc(dest):
         subprocess.run([str(VLC_SRC / "vlc-cache-gen.exe"), str(cache / "plugins")], check=True, capture_output=True)
     elif not (cache / "libvlc.dll").is_file():
         sys.exit(f"VLC não encontrado em {VLC_SRC} nem guardado em {cache} (winget install VideoLAN.VLC)")
+    for name in ("libvlc.dll", "libvlccore.dll"):
+        check_signature(cache / name, "VideoLAN")
     shutil.copytree(cache, dest, dirs_exist_ok=True)
     size = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file())
     print(f"VLC: {dest} ({size / 2**20:.0f} MB)")
@@ -139,6 +153,7 @@ def copy_adb(dest):
     src = Path(tvstream.find_adb())
     if not src.is_file():
         sys.exit("adb não encontrado: winget install Google.PlatformTools")
+    check_signature(src, "Google LLC")
     dest.mkdir(exist_ok=True)
     for name in ("adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll"):
         shutil.copy2(src.with_name(name), dest / name)
@@ -160,7 +175,7 @@ def copy_tv_app(dest):
 
 def stop_running():
     """Antes de trocar os arquivos de dist\\onVLC: pausa a tarefa (senão ela reabre a biblioteca no meio do build e o
-    Windows não deixa apagar a pasta) e fecha a biblioteca e o player (autorizado pelo Lucas)."""
+    Windows não deixa apagar a pasta) e fecha a biblioteca e o player."""
     winsetup.stop_task()
     subprocess.run(["taskkill", "/IM", f"{NAME}.exe", "/F"], capture_output=True)
     time.sleep(1)
@@ -184,6 +199,9 @@ def main():
 
     exe = ROOT / "dist" / NAME / f"{NAME}.exe"
     trim(exe.parent / "_internal")
+    for doc in ("LICENSE", "THIRD_PARTY.md"):  # licença do onVLC e dos programas que vão junto
+        if (ROOT / doc).is_file():
+            shutil.copy2(ROOT / doc, exe.parent / doc)
     shutil.copy2(lib_exe, exe.with_name(lib_exe.name))
     copy_vlc(exe.parent / "vlc")
     copy_ffmpeg(exe.parent / "ffmpeg")

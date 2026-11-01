@@ -1,0 +1,8 @@
+# Dependências do onVLC no PC (o que o player usa). As versões exatas, com hash, ficam em requirements.txt,
+# gerado por: python -m piptools compile --generate-hashes requirements.in requirements-build.in -o requirements.txt
+# Instalar: python -m pip install --require-hashes -r requirements.txt
+PySide6==6.12.0
+python-vlc==3.0.21203
+keyring==25.7.0
+zeroconf==0.153.0
+androidtvremote2==0.3.2

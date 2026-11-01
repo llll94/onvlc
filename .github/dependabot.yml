@@ -1,0 +1,15 @@
+# Avisa (por pull request) quando sair versão nova das dependências: Go, Python e as ações do GitHub.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /server
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

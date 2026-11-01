@@ -1,0 +1,3 @@
+# Só para gerar o .exe e conferir o código (tools\build.py).
+pyinstaller==6.22.3
+pyflakes

@@ -30,7 +30,7 @@ ABI = "armeabi-v7a"  # a Mi Box (32 bits)
 # e a senha, no Gerenciador de Credenciais do Windows (serviço onVLC, "apk_keystore_v2"). A chave antiga
 # (tvcache.keystore, "apk_keystore") vazou no histórico do git em out/2026 e foi aposentada em 01/11/2026.
 # GUARDE UMA CÓPIA desta chave fora do PC: sem ela, ninguém consegue atualizar o app nas TVs.
-KEYSTORE = Path(os.environ["LOCALAPPDATA"]) / "onVLC" / "onvlc-tv.keystore"
+KEYSTORE = Path(os.environ["LOCALAPPDATA"]) / "onVLC-dev" / "onvlc-tv.keystore"  # fora da pasta de dados do app (o desinstalador pode apagar aquela)
 
 
 def libvlc():
