@@ -30,7 +30,17 @@ public class PairActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        Intent in = getIntent();
+        handle(getIntent());
+    }
+
+    // o Android pode entregar o pedido seguinte a esta mesma tela, se ela ainda estiver por cima
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        handle(intent);
+    }
+
+    private void handle(Intent in) {
         String pc = in.getStringExtra("pc"), key = in.getStringExtra("key");
         if (pc != null || key != null) PcFinder.use(this, pc, key);
         Intent out = new Intent(this, LibraryActivity.class)
