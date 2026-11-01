@@ -1,4 +1,4 @@
-package com.lucas.tvcache;
+package app.onvlc.tv;
 
 import android.app.Activity;
 import android.media.AudioDeviceInfo;
@@ -64,6 +64,7 @@ final class SelfTest {
         long n = 0, t0 = System.nanoTime();
         try {
             c = (HttpURLConnection) new URL(base + "/api/speed?mb=32").openConnection();
+            PcFinder.auth(c);
             c.setConnectTimeout(3000);
             c.setReadTimeout(10000);
             byte[] buf = new byte[64 << 10];
@@ -87,6 +88,7 @@ final class SelfTest {
         HttpURLConnection c = null;
         try {
             c = (HttpURLConnection) new URL(base + "/api/selftest/result").openConnection();
+            PcFinder.auth(c);
             c.setConnectTimeout(3000);
             c.setReadTimeout(5000);
             c.setRequestMethod("POST");

@@ -1,4 +1,4 @@
-package com.lucas.tvcache;
+package app.onvlc.tv;
 
 import org.json.JSONObject;
 
@@ -16,6 +16,7 @@ final class Progress {
     static void send(String base, String id, double pos, double dur) {
         try {
             HttpURLConnection c = (HttpURLConnection) new URL(base + "/api/progress").openConnection();
+            PcFinder.auth(c);
             c.setConnectTimeout(3000);
             c.setReadTimeout(5000);
             c.setRequestMethod("POST");

@@ -1,7 +1,8 @@
-package com.lucas.tvcache;
+package app.onvlc.tv;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -11,10 +12,14 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.RenderProcessGoneDetail;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.widget.TextView;
 
 import org.json.JSONObject;
 
@@ -26,9 +31,12 @@ import org.json.JSONObject;
  * O filme toca aqui mesmo (VideoPlayer, motor do VLC) numa superfície atrás da página; a página
  * fica transparente e desenha a barra e os menus por cima. A posição vai para o PC a cada 10 s e ao parar.
  *
- * "Assistir na TV" do PC abre esta tela pelo adb com extras: play (id do vídeo) + pos (ms), ou stop.
- * O assistente "Configurar a TV" do PC abre com pc ("http://IP:8780": onde o PC está, sem procurar) e selftest (toca o
- * vídeo de teste e conta o resultado). Os dois também valem pelo link onvlc://abrir?pc=...&selftest=1.
+ * Pedidos do PC (tocar, parar, teste) chegam pela PairActivity, que só o adb abre; esta tela só obedece a extras que
+ * trazem o token da PairActivity (ela é exportada só porque o lançador da TV precisa abrir).
+ *
+ * Segurança da página: o WebView só carrega o que vem do servidor local deste app (CacheServer, com um token na
+ * rota); qualquer outro endereço (link, redirect, iframe) é bloqueado, porque a página tem acesso à ponte
+ * window.onvlc. A depuração do WebView só liga numa build de desenvolvimento (tools\build_tvcache.py --debug).
  */
 public class LibraryActivity extends Activity implements VideoPlayer.Listener {
     private WebView web;
@@ -48,12 +56,20 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        WebView.setWebContentsDebuggingEnabled(true);  // o PC mexe na página pelo adb (tools\tvjs.py)
+        // só na build de desenvolvimento: o PC mexe na página pelo adb (tools\tvjs.py)
+        WebView.setWebContentsDebuggingEnabled((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0);
+        PcFinder.key(this);
         PcFinder.search(this);
         try {
             CacheServer.get(this).startUi();
         } catch (Exception e) {
-            // a porta já está aberta por este mesmo app
+            // outro app está com a porta: não abre a página dele (ela teria a ponte deste app)
+            TextView msg = new TextView(this);
+            msg.setText("O onVLC não conseguiu abrir. Reinicie a TV e tente de novo.");
+            msg.setTextSize(24);
+            msg.setPadding(96, 96, 96, 96);
+            setContentView(msg);
+            return;
         }
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.parseColor("#0b0b0c"));
@@ -63,11 +79,34 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
+        s.setAllowFileAccess(false);
+        s.setAllowContentAccess(false);
         web.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView v, String url) {
                 pageReady = true;
                 deliverPlay();
+            }
+
+            // navegação (link, redirect, location.href): só dentro da página local
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
+                return !CacheServer.isLocal(r.getUrl().toString());
+            }
+
+            // qualquer outro carregamento (iframe, imagem, script, fetch de fora): bloqueado
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
+                if (CacheServer.isLocal(r.getUrl().toString())) return null;
+                return new WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", null,
+                        new java.io.ByteArrayInputStream(new byte[0]));
+            }
+
+            // a página travou ou foi derrubada: recria a tela em vez de fechar o app
+            @Override
+            public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail d) {
+                recreate();
+                return true;
             }
         });
         web.addJavascriptInterface(new Bridge(), "onvlc");
@@ -76,7 +115,7 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
         setContentView(root);
         web.requestFocus();
         // abre na hora com a última lista guardada; quando o PC é achado, a página pede a lista nova sozinha
-        web.loadUrl("http://127.0.0.1:" + CacheServer.PORT + "/ui/index.html");
+        web.loadUrl(CacheServer.local("/ui/index.html"));
         handleIntent(getIntent());
     }
 
@@ -90,18 +129,9 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
     /** Pedidos do PC: onde ele está, teste, tocar um vídeo da biblioteca num ponto, ou parar o que está tocando. */
     private void handleIntent(Intent i) {
         if (i == null) return;
-        Uri link = i.getData();
-        if (link != null && "onvlc".equals(link.getScheme())) {
-            i.setData(null);
-            if (link.getQueryParameter("pc") != null) PcFinder.use(this, link.getQueryParameter("pc"));
-            if ("1".equals(link.getQueryParameter("selftest"))) startSelfTest();
-            return;
-        }
-        String pc = i.getStringExtra("pc");
-        if (pc != null) {
-            i.removeExtra("pc");
-            PcFinder.use(this, pc);
-        }
+        // só obedece ao que veio da PairActivity (o adb do PC); outros apps podem abrir esta tela, mas não mandar nela
+        if (!PairActivity.TOKEN.equals(i.getStringExtra("t"))) return;
+        i.removeExtra("t");
         if (i.getBooleanExtra("selftest", false)) {
             i.removeExtra("selftest");
             startSelfTest();
@@ -176,7 +206,7 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
                 testBuffering = false;
                 web.setVisibility(View.INVISIBLE);
                 getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-                player.open("selftest", base0 + "/api/selftest", 0, new String[0]);
+                player.open("selftest", CacheServer.local("/ui/api/selftest"), 0, new String[0]);
                 // segurança: o vídeo não andou. Folgado: na 1ª vez depois de instalar, o motor monta a lista de fontes
                 // do sistema antes de mostrar o primeiro quadro (35 s na Mi Box)
                 ui.postDelayed(this::finishSelfTest, 120_000);
@@ -313,6 +343,12 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
             });
         }
 
+        /** A TV já foi configurada pelo onVLC do PC (tem a chave)? A tela usa para explicar o que fazer. */
+        @JavascriptInterface
+        public boolean paired() {
+            return PcFinder.paired(LibraryActivity.this);
+        }
+
         /** O botão "Ligar o PC" aparece só quando o app já sabe o MAC do PC. */
         @JavascriptInterface
         public boolean canWakePc() {
@@ -329,10 +365,12 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
         @JavascriptInterface
         public void post(final String path, final String json) {
             final String b = PcFinder.base();
-            if (b == null || !path.startsWith("/api/")) return;
+            // só rotas da biblioteca, sem truques no caminho, e corpo pequeno
+            if (b == null || !path.matches("/api/[a-z/]{1,40}") || json == null || json.length() > 16384) return;
             new Thread(() -> {
                 try {
                     java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(b + path).openConnection();
+                    PcFinder.auth(c);
                     c.setConnectTimeout(3000);
                     c.setReadTimeout(5000);
                     c.setRequestMethod("POST");
@@ -357,13 +395,16 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
             try {
                 org.json.JSONArray a = new org.json.JSONArray(json);
                 java.util.ArrayList<CacheServer.KitItem> items = new java.util.ArrayList<>();
-                for (int i = 0; i < a.length(); i++) {
+                for (int i = 0; i < a.length() && i < 64; i++) {
                     JSONObject o = a.getJSONObject(i);
+                    String id = o.getString("id");
+                    long size = o.getLong("size");
+                    if (!id.matches("[0-9a-f]{1,32}") || size <= 0 || size > (2L << 40)) continue;  // até 2 TB
                     CacheServer.KitItem it = new CacheServer.KitItem();
-                    it.url = b + "/v/" + o.getString("id") + "/" + o.getLong("size") + "/" + Uri.encode(o.getString("file"));
-                    it.size = o.getLong("size");
-                    it.bps = o.optLong("bps", 0);
-                    it.pos = o.optDouble("pos", 0);
+                    it.url = b + "/v/" + id + "/" + size + "/" + Uri.encode(o.getString("file"));
+                    it.size = size;
+                    it.bps = Math.max(0, Math.min(400_000_000L, o.optLong("bps", 0)));  // até 400 Mb/s
+                    it.pos = Math.max(0, o.optDouble("pos", 0));
                     items.add(it);
                 }
                 CacheServer.get(LibraryActivity.this).warm(items);
@@ -391,17 +432,20 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
                 PcFinder.lost(this);
                 return;
             }
-            String upstream = base + "/v/" + o.getString("id") + "/" + o.getLong("size") + "/" + Uri.encode(o.getString("file"));
-            CacheServer.get(this).open(upstream, o.optLong("bps", 0));
+            String id = o.getString("id");
+            if (!id.matches("[0-9a-f]{1,32}")) return;
+            String upstream = base + "/v/" + id + "/" + o.getLong("size") + "/" + Uri.encode(o.getString("file"));
+            CacheServer.get(this).open(upstream, Math.max(0, Math.min(400_000_000L, o.optLong("bps", 0))));
             String session = Long.toHexString(System.nanoTime());
-            String local = "http://127.0.0.1:" + CacheServer.PORT + "/stream/" + session + "/" + Uri.encode(o.getString("file"));
+            String local = CacheServer.local("/stream/" + session + "/" + Uri.encode(o.getString("file")));
             if (!prepareOnly) {
                 startForegroundService(new Intent(this, CacheService.class));
                 getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             }
             lastSent = -1;
-            String[] subs = new String[o.optInt("subs", 0)];
-            for (int i = 0; i < subs.length; i++) subs[i] = base + "/sub/" + o.getString("id") + "/" + i;
+            // legendas pelo servidor local (ele põe a chave no pedido ao PC; o motor de vídeo não sabe pôr)
+            String[] subs = new String[Math.max(0, Math.min(32, o.optInt("subs", 0)))];
+            for (int i = 0; i < subs.length; i++) subs[i] = CacheServer.local("/ui/sub/" + id + "/" + i);
             if (prepareOnly) player.prepare(o.getString("id"), local, o.optLong("pos", 0), subs);
             else player.open(o.getString("id"), local, o.optLong("pos", 0), subs);
         } catch (Exception e) {

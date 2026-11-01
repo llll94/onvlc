@@ -36,6 +36,7 @@ NO_WINDOW = 0x08000000
 LIB = f"http://127.0.0.1:{library.PORT}"
 ROOT = Path(__file__).resolve().parent
 TMDB_TEST = "https://api.themoviedb.org/3/configuration"
+OLD_PKG = "com.lucas.tvcache"  # nome antigo do app da TV (assinado com a chave que vazou): é tirado ao instalar o novo
 
 
 def bundled_apk():
@@ -149,6 +150,9 @@ def install_apk(box, progress=lambda p: None):
     box.shell(f"rm -f {tmp}")
     log.info("instalar na TV: %s", out.strip()[:300])
     if "Success" in out:
+        # o app antigo (outro nome de pacote, até nov/2026) sai: senão ficam dois onVLC na tela inicial
+        if OLD_PKG in box.shell(f"pm list packages --user current {OLD_PKG}"):
+            box.shell(f"pm uninstall --user current {OLD_PKG}")
         return True, "onVLC instalado na TV."
     if "UPDATE_INCOMPATIBLE" in out:
         return False, "Já existe outro onVLC na TV, assinado com outra chave. Desinstale o de lá e tente de novo."

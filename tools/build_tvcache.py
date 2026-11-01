@@ -27,8 +27,10 @@ LIBVLC_DIR = ROOT / "build" / "libvlc"
 LIBVLC_SHA256 = "b48dab96e0e90e34cce3861963500c144a5aadb1b249d501d6a4b104d849e61b"
 ABI = "armeabi-v7a"  # a Mi Box (32 bits)
 # chave própria do app (precisa ser sempre a mesma para atualizar por cima): fica fora do repositório,
-# e a senha, no Gerenciador de Credenciais do Windows (serviço onVLC, "apk_keystore")
-KEYSTORE = Path(os.environ["LOCALAPPDATA"]) / "onVLC" / "tvcache.keystore"
+# e a senha, no Gerenciador de Credenciais do Windows (serviço onVLC, "apk_keystore_v2"). A chave antiga
+# (tvcache.keystore, "apk_keystore") vazou no histórico do git em out/2026 e foi aposentada em 01/11/2026.
+# GUARDE UMA CÓPIA desta chave fora do PC: sem ela, ninguém consegue atualizar o app nas TVs.
+KEYSTORE = Path(os.environ["LOCALAPPDATA"]) / "onVLC" / "onvlc-tv.keystore"
 
 
 def libvlc():
@@ -104,7 +106,9 @@ def main():
     # guardados quando a versão do app muda
     commits = subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
     code = 100 + int(commits or 0)
-    run(bt / "aapt2.exe", "link", "-o", base, "-I", android_jar, "--manifest", SRC / "AndroidManifest.xml",
+    # --debug: build de desenvolvimento (depuração do WebView ligada, para o tools	vjs.py). A de release não tem.
+    debug = ["--debug-mode"] if "--debug" in sys.argv else []
+    run(bt / "aapt2.exe", "link", "-o", base, "-I", android_jar, "--manifest", SRC / "AndroidManifest.xml", *debug,
         "--min-sdk-version", "26", "--target-sdk-version", "34", "--version-code", str(code),
         "--version-name", f"3.{code}", "--replace-version", "-A", assets, res_zip)
     with zipfile.ZipFile(base, "a", zipfile.ZIP_DEFLATED) as z:
@@ -121,16 +125,16 @@ def main():
     import keyring
     import secrets
     ks = KEYSTORE
-    pw = keyring.get_password("onVLC", "apk_keystore")
+    pw = keyring.get_password("onVLC", "apk_keystore_v2")
     if not ks.exists():  # só na primeira vez: um app instalado com outra chave não aceita atualização
         pw = secrets.token_urlsafe(24)
         ks.parent.mkdir(parents=True, exist_ok=True)
         run(jdk / "bin" / "keytool.exe", "-genkeypair", "-keystore", ks, "-alias", "onvlc", "-storepass:env", "ONVLC_KS",
             "-keypass:env", "ONVLC_KS", "-dname", "CN=onVLC", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
             env=dict(env, ONVLC_KS=pw))
-        keyring.set_password("onVLC", "apk_keystore", pw)
+        keyring.set_password("onVLC", "apk_keystore_v2", pw)
     if not pw:
-        sys.exit("Senha da chave do APK não está no Gerenciador de Credenciais (onVLC / apk_keystore)")
+        sys.exit("Senha da chave do APK não está no Gerenciador de Credenciais (onVLC / apk_keystore_v2)")
     apk = ROOT / "dist" / "tvcache.apk"
     apk.parent.mkdir(exist_ok=True)
     run(bt / "apksigner.bat", "sign", "--ks", ks, "--ks-pass", "env:ONVLC_KS", "--out", apk, aligned,

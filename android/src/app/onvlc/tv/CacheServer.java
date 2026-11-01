@@ -1,4 +1,4 @@
-package com.lucas.tvcache;
+package app.onvlc.tv;
 
 import android.content.Context;
 import android.content.Intent;
@@ -44,11 +44,32 @@ import java.util.Map;
  * Bloco que sumiu do disco (o Android limpa o cache quando falta espaço) ou ficou cortado (queda de energia)
  * é descartado e baixado de novo. Com menos de 1 GB livre na Mi Box, o cache encolhe em vez de crescer.
  *
- * Rotas: /stream/<nome> (o vídeo, com Range), /status (JSON da janela), /stop,
- * /ui/<arquivo> (a biblioteca da TV: repassa para o PC e guarda uma cópia para quando ele estiver desligado).
+ * Rotas (todas debaixo de /<TOKEN>/, um valor aleatório por processo: outro app na TV não adivinha o endereço):
+ * /stream/<nome> (o vídeo, com Range), /status (JSON da janela), /stop,
+ * /ui/<arquivo> (a biblioteca da TV: repassa para o PC, com a chave, e guarda uma cópia para quando ele estiver
+ * desligado; imagens e legendas vão para o cache do sistema, que o Android limpa quando falta espaço).
  */
 final class CacheServer {
     static final int PORT = 8090;
+    static final String TOKEN;  // prefixo das rotas: só este app sabe
+
+    static {
+        byte[] b = new byte[16];
+        new java.security.SecureRandom().nextBytes(b);
+        TOKEN = PcFinder.hex(b);
+    }
+
+    /** Endereço local de uma rota ("/ui/index.html" → http://127.0.0.1:8090/<token>/ui/index.html). */
+    static String local(String route) {
+        return "http://127.0.0.1:" + PORT + "/" + TOKEN + route;
+    }
+
+    /** O endereço é deste servidor local (com o token)? O WebView só carrega esses. */
+    static boolean isLocal(String url) {
+        return url != null && url.startsWith("http://127.0.0.1:" + PORT + "/" + TOKEN + "/");
+    }
+
+    private final java.util.concurrent.ExecutorService conns = java.util.concurrent.Executors.newFixedThreadPool(16);
     static final long BLOCK = 8L << 20;
     static final long LIMIT = 2L << 30;
     static final int AHEAD_S = 300, BEHIND_S = 60;
@@ -162,7 +183,7 @@ final class CacheServer {
             while (!ss.isClosed()) {
                 try {
                     final Socket s = ss.accept();
-                    new Thread(() -> handle(s), "cache-conn").start();
+                    conns.execute(() -> handle(s));  // no máximo 16 conexões trabalhando ao mesmo tempo
                 } catch (IOException e) {
                     // servidor fechado
                 }
@@ -175,7 +196,10 @@ final class CacheServer {
     private static String readLine(InputStream in) throws IOException {
         StringBuilder sb = new StringBuilder();
         int c;
-        while ((c = in.read()) != -1 && c != '\n') if (c != '\r') sb.append((char) c);
+        while ((c = in.read()) != -1 && c != '\n') {
+            if (c != '\r') sb.append((char) c);
+            if (sb.length() > 8192) throw new IOException("linha grande demais");
+        }
         return c == -1 && sb.length() == 0 ? null : sb.toString();
     }
 
@@ -188,10 +212,19 @@ final class CacheServer {
             String[] req = line.split(" ");
             String method = req[0], path = req.length > 1 ? req[1] : "/";
             String range = null;
+            int headers = 0;
             for (String h; (h = readLine(in)) != null && !h.isEmpty(); ) {
+                if (++headers > 64) return;
                 if (h.toLowerCase(Locale.ROOT).startsWith("range:")) range = h.substring(6).trim();
             }
             OutputStream out = new BufferedOutputStream(sock.getOutputStream(), 256 * 1024);
+            String prefix = "/" + TOKEN + "/";
+            if (!path.startsWith(prefix)) {  // sem o token: não existe
+                send(out, "404 Not Found", "text/plain", new byte[0]);
+                out.flush();
+                return;
+            }
+            path = path.substring(prefix.length() - 1);
             if (path.startsWith("/status")) {
                 send(out, "200 OK", "application/json", status().getBytes("UTF-8"));
             } else if (path.startsWith("/stop")) {
@@ -235,9 +268,16 @@ final class CacheServer {
             send(out, "404 Not Found", "text/plain", new byte[0]);
             return;
         }
-        boolean image = rel.startsWith("img/");
-        String remote = rel.startsWith("api/") || image ? "/" + rel : "/tv/" + rel;
-        File cached = new File(new File(ctx.getFilesDir(), "ui"), rel.replace('/', '_'));
+        boolean image = rel.startsWith("img/"), sub = rel.startsWith("sub/");
+        if (sub && !rel.matches("sub/[0-9a-f]{1,32}/\\d{1,2}")) {
+            send(out, "404 Not Found", "text/plain", new byte[0]);
+            return;
+        }
+        String remote = rel.startsWith("api/") || image || sub ? "/" + rel : "/tv/" + rel;
+        // imagens e legendas no cache do sistema (o Android apaga quando falta espaço); página e listas, guardadas
+        boolean big = image || sub || rel.equals("api/selftest");
+        File folder = big ? new File(ctx.getCacheDir(), "ui") : new File(ctx.getFilesDir(), "ui");
+        File cached = new File(folder, rel.replace('/', '_'));
         String type = typeOf(rel);
         // imagens não mudam (um arquivo novo ganha outro nome): a cópia guardada vale sempre
         if (image && cached.exists()) {
@@ -249,7 +289,7 @@ final class CacheServer {
             HttpURLConnection c = null;
             boolean ok = false;
             try {
-                c = connect(base + remote.replace(" ", "%20"));
+                c = connect(base + remote.replace(" ", "%20"));  // connect() põe a chave
                 c.setConnectTimeout(2000);
                 c.setReadTimeout(8000);
                 int code = c.getResponseCode();
@@ -289,6 +329,8 @@ final class CacheServer {
     }
 
     private static String typeOf(String rel) {
+        if (rel.startsWith("sub/")) return "text/plain; charset=utf-8";
+        if (rel.equals("api/selftest")) return "video/mp4";
         if (rel.startsWith("api/")) return "application/json; charset=utf-8";
         if (rel.endsWith(".html")) return "text/html; charset=utf-8";
         if (rel.endsWith(".js")) return "text/javascript; charset=utf-8";
@@ -322,7 +364,7 @@ final class CacheServer {
             }
             partial = true;
         }
-        if (start >= total) {
+        if (start >= total || end < start) {
             out.write(("HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */" + total
                     + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").getBytes("ISO-8859-1"));
             return;
@@ -568,6 +610,16 @@ final class CacheServer {
                     victim = n;
                 }
             }
+            if (victim == null && diskLow()) {
+                // disco quase cheio e só sobraram blocos de kit: solta um kit (o Android precisa do espaço)
+                for (String n : store.keySet()) {
+                    if (pinned.contains(n) && !(n.startsWith(prefix) && Math.abs(Long.parseLong(n.substring(prefix.length())) - p) <= ahead)) {
+                        victim = n;
+                        pinned.remove(n);
+                        break;
+                    }
+                }
+            }
             if (victim == null) return false;
             drop(victim);
             used -= BLOCK;
@@ -584,6 +636,7 @@ final class CacheServer {
 
     private HttpURLConnection connect(String url) throws IOException {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        PcFinder.auth(c);  // a biblioteca do PC só responde a quem tem a chave
         c.setConnectTimeout(5000);
         c.setReadTimeout(15000);
         return c;
@@ -698,7 +751,7 @@ final class CacheServer {
         java.util.LinkedHashSet<Long> want = new java.util.LinkedHashSet<>();
         long total = (it.size + BLOCK - 1) / BLOCK;
         double perSecond = Math.max(1_000_000, it.bps) / 8.0 / BLOCK;
-        long minute = (long) Math.ceil(KIT_SECONDS * perSecond) + 1;
+        long minute = Math.min(KIT_LIMIT / BLOCK, (long) Math.ceil(KIT_SECONDS * perSecond) + 1);
         for (long i : learned(k)) if (i < total) want.add(i);
         want.add(0L);
         if (total > 1) want.add(total - 1);  // índice do MKV / MP4 no fim
@@ -820,9 +873,9 @@ final class CacheServer {
             }
             ranges.append(']');
             // src: qual endereço está sendo servido (o PC usa para saber se outra janela assumiu a TV)
-            String src = upstream == null ? "" : upstream.replace("\\", "\\\\").replace("\"", "\\\"");
+            String src = org.json.JSONObject.quote(upstream == null ? "" : upstream);
             return String.format(Locale.US,
-                    "{\"state\":\"%s\",\"src\":\"%s\",\"pos\":%.1f,\"dur\":%.1f,\"ahead\":%.1f,\"behind\":%.1f,"
+                    "{\"state\":\"%s\",\"src\":%s,\"pos\":%.1f,\"dur\":%.1f,\"ahead\":%.1f,\"behind\":%.1f,"
                             + "\"cachedMb\":%d,\"limitMb\":%d,\"kitMb\":%d,\"kitWantMb\":%d,\"mbps\":%.1f,\"loading\":%d,\"ranges\":%s}",
                     upstream == null ? "idle" : (running ? "ok" : "paused"), src, playhead * spb, size > 0 ? size * spb : 0,
                     ahead, behind, cachedBytes() >> 20, LIMIT >> 20, kitHave() * (BLOCK >> 20), pinned.size() * (BLOCK >> 20),

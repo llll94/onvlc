@@ -70,7 +70,7 @@ function index() {
     kind: "gone", id: "h:" + id, realId: id, title: snap.title, year: snap.year, runtime: snap.runtime || 0,
     genres: snap.genres || [], vote: snap.vote || 0, overview: snap.overview || "", poster: snap.poster || "",
     backdrop: snap.backdrop || "", logo: snap.logo || "", frame: snap.frame || "", quality: snap.quality || "",
-    ep: snap.season ? `T${snap.season}:E${snap.episode} · ${snap.epTitle || ""}` : "", audio: [], subs: [] });
+    ep: snap.season ? `T${esc(snap.season)}:E${esc(snap.episode)} · ${snap.epTitle || ""}` : "", audio: [], subs: [] });
   const seen = new Set();
   LIB.watchedList = [];
   (LIB.history || []).forEach(h => {
@@ -78,11 +78,11 @@ function index() {
     seen.add(h.id);
     const it = gone(h.id, h);
     if (it.kind === "gone") it.watched = it.watched || h.date;
-    LIB.watchedList.push({ it, when: h.date, ep: h.kind === "episode" ? `T${h.season}:E${h.episode}` : "" });
+    LIB.watchedList.push({ it, when: h.date, ep: h.kind === "episode" ? `T${esc(h.season)}:E${esc(h.episode)}` : "" });
   });
 }
 const nameOf = it => it.kind === "episode" ? it.show.title : it.title;
-const epLabel = e => `T${e.season}:E${e.episode}`;
+const epLabel = e => `T${esc(e.season)}:E${esc(e.episode)}`;
 function backdropOf(it) {
   if (it.kind === "episode") return it.show.backdrop ? [it.show.backdrop, false] : [it.still || it.show.frame, true];
   return it.backdrop ? [it.backdrop, false] : [it.frame, true];
@@ -111,7 +111,7 @@ function titleBlock(it) {
 function metaLine(it) {
   const p = [];
   const t = it.kind === "episode" ? it.show : it;
-  if (t.year) p.push(`<span>${t.year}</span>`);
+  if (t.year) p.push(`<span>${esc(t.year)}</span>`);
   if (it.kind === "show") {
     const n = episodesOf(it).length;
     p.push(`<span>${it.seasons.length > 1 ? plural(it.seasons.length, "temporada", "temporadas") : plural(n, "episódio", "episódios")}</span>`);
@@ -119,7 +119,7 @@ function metaLine(it) {
     p.push(`<span>${hm(it.runtime)}</span>`);
   }
   if (t.genres && t.genres.length) p.push(`<span>${esc(t.genres.join(", "))}</span>`);
-  if (t.vote) p.push(`<span><span class="star">★</span> ${t.vote.toLocaleString("pt-BR")}</span>`);
+  if (t.vote) p.push(`<span><span class="star">★</span> ${esc(Number(t.vote).toLocaleString("pt-BR"))}</span>`);
   const q = it.kind === "show" ? (episodesOf(it)[0] || {}).quality : it.quality;
   if (q) p.push(`<span class="q">${esc(q)}</span>`);
   if (it.broken) p.push(`<span class="bad">Arquivo com problema</span>`);
@@ -307,7 +307,7 @@ function renderShow(show, season, keepKey) {
       <div class="logo" style="height:170px">${titleBlock(show)}</div>${metaLine(show)}
       <div id="ep-text">${synopsis(show.overview)}</div>${offlineNote()}
       ${btnsHtml(btns)}
-      ${seasons.length > 1 ? `<div class="seasons">${seasons.map((se, i) => `<div class="btn${i === si ? " cur" : ""}" data-k="s:${i}" data-season="${i}">Temporada ${se.n}</div>`).join("")}</div>` : ""}
+      ${seasons.length > 1 ? `<div class="seasons">${seasons.map((se, i) => `<div class="btn${i === si ? " cur" : ""}" data-k="s:${i}" data-season="${i}">Temporada ${esc(se.n)}</div>`).join("")}</div>` : ""}
     </div>
     <div class="eps"><section class="row"><h3>${seasons.length > 1 ? `Temporada ${seasons[si].n}` : "Episódios"}</h3>
       <div class="cards">${seasons[si].episodes.map(e => episodeCard(e)).join("")}</div></section></div></div>`;
@@ -333,15 +333,16 @@ function episodeCard(e) {
   const src = e.still || e.show.backdrop || e.show.frame;
   return `<div class="card wide${e.broken ? " broken" : ""}" data-id="${e.id}" data-k="e:${e.id}"><img src="${img(src)}" alt="" loading="lazy" decoding="async">
     ${e.broken ? `<div class="badge">Com problema</div>` : ""}
-    <div class="cap"><div class="nm">${e.episode}. ${esc(e.title)}</div>
+    <div class="cap"><div class="nm">${esc(e.episode)}. ${esc(e.title)}</div>
     ${e.pos ? progressBits(e) : `<div class="sub">${e.runtime ? hm(e.runtime) : ""}</div>`}</div></div>`;
 }
 
 function renderSearching() {
   setBg(null);
   view.innerHTML = `<div class="empty"><div class="spinner"></div><h2>${waking ? "Ligando o PC" : "Procurando o PC"}</h2>
-    <p>${canWake() ? "Os filmes ficam no computador. Se ele estiver dormindo ou desligado, use <b>Ligar o PC</b>, no alto da tela."
-                   : "Os filmes ficam no computador. Abra o <b>onVLC</b> no PC e a TV acha sozinha."}</p></div>`;
+    <p>${!paired() ? "Esta TV ainda não foi configurada. No PC, abra o <b>onVLC</b>: menu da TV → <b>Configurar</b> → <b>TV</b>."
+       : canWake() ? "Os filmes ficam no computador. Se ele estiver dormindo ou desligado, use <b>Ligar o PC</b>, no alto da tela."
+       : "Os filmes ficam no computador. Abra o <b>onVLC</b> no PC e a TV acha sozinha."}</p></div>`;
   zones = [];
   setZones([wakeZone()]);
 }
@@ -389,8 +390,8 @@ function renderGone(it, keepKey) {
   const seen = it.watched ? `<span class="seen-t">✓ Assistido ${["hoje", "ontem"].includes(dateLabel(it.watched)) ? dateLabel(it.watched) : "em " + dateLabel(it.watched)}</span>` : "";
   view.innerHTML = `<div class="detail"><div class="body">
       <div class="logo">${titleBlock(it)}</div>
-      <div class="meta">${[it.year && `<span>${it.year}</span>`, it.ep && `<span>${esc(it.ep)}</span>`, it.runtime && !it.ep && `<span>${hm(it.runtime)}</span>`,
-        it.genres.length && `<span>${esc(it.genres.join(", "))}</span>`, it.vote && `<span><span class="star">★</span> ${it.vote.toLocaleString("pt-BR")}</span>`, seen]
+      <div class="meta">${[it.year && `<span>${esc(it.year)}</span>`, it.ep && `<span>${esc(it.ep)}</span>`, it.runtime && !it.ep && `<span>${hm(it.runtime)}</span>`,
+        it.genres.length && `<span>${esc(it.genres.join(", "))}</span>`, it.vote && `<span><span class="star">★</span> ${esc(Number(it.vote).toLocaleString("pt-BR"))}</span>`, seen]
         .filter(Boolean).join("")}</div>
       ${synopsis(it.overview)}
       <div class="note gone"><span><b>Indisponível.</b> Este arquivo não está mais na pasta onVLC do PC. Coloque ele de volta lá para assistir.</span></div>
@@ -528,6 +529,8 @@ tv.addEventListener("click", e => {
 // ---------- ligar o PC pela rede (Wake-on-LAN, pelo app) ----------
 let waking = 0;  // quando o botão foi apertado (a página procura o PC mais vezes por 2 min)
 const canWake = () => !!(window.onvlc && window.onvlc.canWakePc && window.onvlc.canWakePc());
+// fora do app da TV (no PC, ?pc=1) não há pareamento a fazer
+const paired = () => !(window.onvlc && window.onvlc.paired) || window.onvlc.paired();
 const wakeZone = () => $("wake").hidden ? [] : [$("wake")];
 let autoWoke = false;  // ao abrir o app: se o PC não responder, manda acordar uma vez sozinho
 function updateWake() {

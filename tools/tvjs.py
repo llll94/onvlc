@@ -20,7 +20,7 @@ def connect():
     box = tvstream.TVBox()
     box.connect()
     socks = box.shell("cat /proc/net/unix | grep -o 'webview_devtools_remote_[0-9]*' | sort -u")
-    pid = box.shell("pidof com.lucas.tvcache")
+    pid = box.shell("pidof app.onvlc.tv")
     name = next((s for s in socks.split() if s.endswith("_" + pid)), None) or (socks.split() or [None])[-1]
     if not name:
         sys.exit("página da biblioteca não está aberta na TV")

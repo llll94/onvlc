@@ -1,10 +1,12 @@
-package com.lucas.tvcache;
+package app.onvlc.tv;
 
 import android.content.Context;
 import android.content.SharedPreferences;
 
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
@@ -24,6 +26,12 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * A biblioteca conta o MAC da placa de rede do PC no /api/hello; ele fica guardado para o botão "Ligar o PC"
  * mandar o pacote de acordar (Wake-on-LAN) quando o PC estiver dormindo ou desligado.
+ *
+ * Só vale o PC que sabe a chave: o assistente do PC entrega a chave da biblioteca pela PairActivity (que só o adb
+ * abre) e ela fica guardada aqui. Ao achar um candidato, a TV manda um número aleatório (nonce) e confere a
+ * resposta HMAC-SHA256(chave, "hello:" + nonce): outro aparelho da rede que finja ser o onVLC não sabe a chave e é
+ * ignorado. Todo pedido ao PC leva a chave no cabeçalho X-onVLC-Key (auth()). Sem chave (TV nunca configurada),
+ * nenhum PC é aceito: a tela pede para configurar pelo onVLC do PC.
  */
 final class PcFinder {
     static final int PORT = 8780;
@@ -35,17 +43,48 @@ final class PcFinder {
         return base;
     }
 
-    /** O assistente do PC abriu o app dizendo onde o PC está ("http://IP:8780"): usa esse endereço, sem varrer a rede. */
-    static void use(Context ctx, String pcUrl) {
-        String host = android.net.Uri.parse(pcUrl).getHost();
-        if (host == null) return;
-        ctx.getSharedPreferences("pc", Context.MODE_PRIVATE).edit().putString("ip", host).commit();
+    private static volatile String key;  // a chave da biblioteca do PC (64 letras hex), guardada no pareamento
+
+    static String key(Context ctx) {
+        if (key == null) key = ctx.getSharedPreferences("pc", Context.MODE_PRIVATE).getString("key", "");
+        return key;
+    }
+
+    static boolean paired(Context ctx) {
+        return !key(ctx).isEmpty();
+    }
+
+    /** Põe a chave no pedido para o PC. */
+    static void auth(HttpURLConnection c) {
+        String k = key;
+        if (k != null && !k.isEmpty()) c.setRequestProperty("X-onVLC-Key", k);
+    }
+
+    /**
+     * O assistente do PC (pela PairActivity, só adb) disse onde o PC está ("http://IP:8780") e qual é a chave.
+     * Só aceita um IPv4 da rede local, na mesma rede da TV (x.x.x.*): nunca um nome, a própria TV ou a internet.
+     * Devolve false se o endereço ou a chave não servem.
+     */
+    static boolean use(Context ctx, String pcUrl, String newKey) {
+        String host = pcUrl == null ? null : android.net.Uri.parse(pcUrl).getHost();
+        if (host == null || !host.matches("\\d{1,3}(\\.\\d{1,3}){3}")) return false;
+        String prefix = prefix();
+        try {
+            InetAddress a = InetAddress.getByName(host);  // IPv4 literal: não consulta DNS
+            if (!a.isSiteLocalAddress() || prefix == null || !host.startsWith(prefix)) return false;
+        } catch (Exception e) {
+            return false;
+        }
+        if (newKey == null || !newKey.matches("[0-9a-f]{64}")) return false;
+        ctx.getSharedPreferences("pc", Context.MODE_PRIVATE).edit().putString("ip", host).putString("key", newKey).commit();
+        key = newKey;
         synchronized (PcFinder.class) {
             lastScan = 0;
             scanGap = 30_000;
         }
         if (base != null && !base.equals(url(host))) base = null;
         search(ctx);
+        return true;
     }
 
     /** O PC parou de responder: procura de novo em segundo plano. */
@@ -72,6 +111,7 @@ final class PcFinder {
 
     private static String find(Context ctx) {
         SharedPreferences prefs = ctx.getSharedPreferences("pc", Context.MODE_PRIVATE);
+        if (!paired(ctx)) return null;  // sem chave não há como reconhecer o PC: espera o assistente
         String last = prefs.getString("ip", null);
         if (last != null && hello(ctx, last, 1500)) {
             scanGap = 30_000;
@@ -108,25 +148,32 @@ final class PcFinder {
         return "http://" + ip + ":" + PORT;
     }
 
+    private static final SecureRandom RNG = new SecureRandom();
+
+    /** É o PC de verdade? Pergunta com um nonce e confere a resposta com a chave. */
     static boolean hello(Context ctx, String ip, int timeout) {
+        String k = key(ctx);
+        if (k.isEmpty()) return false;
         HttpURLConnection c = null;
         try {
-            c = (HttpURLConnection) new URL(url(ip) + "/api/hello").openConnection();
+            byte[] nb = new byte[16];
+            RNG.nextBytes(nb);
+            String nonce = hex(nb);
+            c = (HttpURLConnection) new URL(url(ip) + "/api/hello?nonce=" + nonce).openConnection();
             c.setConnectTimeout(timeout);
             c.setReadTimeout(timeout + 1000);
             if (c.getResponseCode() != 200) return false;
-            byte[] buf = new byte[512];
+            byte[] buf = new byte[1024];
             InputStream in = c.getInputStream();
-            int n = in.read(buf);
-            String body = n > 0 ? new String(buf, 0, n, "UTF-8") : "";
-            if (!body.contains("onvlc-library")) return false;
-            try {  // o MAC da placa do PC, para acordar ele depois
-                String mac = new org.json.JSONObject(body).optString("mac", "");
-                if (mac.matches("([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}")) {
-                    ctx.getSharedPreferences("pc", Context.MODE_PRIVATE).edit().putString("mac", mac).apply();
-                }
-            } catch (Exception e) {
-                // biblioteca antiga, sem MAC
+            int n = 0, r;
+            while (n < buf.length && (r = in.read(buf, n, buf.length - n)) > 0) n += r;
+            org.json.JSONObject o = new org.json.JSONObject(new String(buf, 0, n, "UTF-8"));
+            if (!"onvlc-library".equals(o.optString("app"))) return false;
+            byte[] want = hmac(k, "hello:" + nonce).getBytes("UTF-8");
+            if (!MessageDigest.isEqual(want, o.optString("auth", "").getBytes("UTF-8"))) return false;  // não sabe a chave
+            String mac = o.optString("mac", "");  // o MAC da placa do PC, para acordar ele depois
+            if (mac.matches("([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}")) {
+                ctx.getSharedPreferences("pc", Context.MODE_PRIVATE).edit().putString("mac", mac).apply();
             }
             return true;
         } catch (Exception e) {
@@ -134,6 +181,18 @@ final class PcFinder {
         } finally {
             if (c != null) c.disconnect();
         }
+    }
+
+    static String hmac(String k, String text) throws Exception {
+        javax.crypto.Mac m = javax.crypto.Mac.getInstance("HmacSHA256");
+        m.init(new javax.crypto.spec.SecretKeySpec(k.getBytes("UTF-8"), "HmacSHA256"));
+        return hex(m.doFinal(text.getBytes("UTF-8")));
+    }
+
+    static String hex(byte[] b) {
+        StringBuilder sb = new StringBuilder(b.length * 2);
+        for (byte x : b) sb.append(String.format("%02x", x & 0xff));
+        return sb.toString();
     }
 
     /** Já sabe o MAC do PC (achou a biblioteca pelo menos uma vez)? */

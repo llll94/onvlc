@@ -1,4 +1,4 @@
-package com.lucas.tvcache;
+package app.onvlc.tv;
 
 import android.app.Activity;
 import android.graphics.PixelFormat;

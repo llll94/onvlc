@@ -1,4 +1,4 @@
-package com.lucas.tvcache;
+package app.onvlc.tv;
 
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -13,13 +13,13 @@ public class CacheService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         NotificationManager nm = getSystemService(NotificationManager.class);
-        nm.createNotificationChannel(new NotificationChannel("tv", "TV Cache", NotificationManager.IMPORTANCE_LOW));
+        nm.createNotificationChannel(new NotificationChannel("tv", "onVLC", NotificationManager.IMPORTANCE_LOW));
         Notification n = new Notification.Builder(this, "tv")
-                .setContentTitle("TV Cache")
+                .setContentTitle("onVLC")
                 .setContentText("Guardando o filme em volta do ponto que está tocando")
                 .setSmallIcon(android.R.drawable.stat_sys_download)
                 .build();
-        startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+        startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
         return START_NOT_STICKY;
     }
 

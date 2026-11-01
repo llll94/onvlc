@@ -144,7 +144,7 @@ function plBuild() {
   const logo = t.logo ? `<img src="${img(t.logo)}" alt="">` : `<h2>${esc(t.title)}</h2>`;
   el.innerHTML = `<div class="pl-dim" id="pl-dim"></div>
     <div class="pl-paused" id="pl-paused"><div class="k">Você está assistindo</div><div class="logo">${logo}</div>
-      <div class="m">${it.kind === "episode" ? `<span>${esc(epLabel(it) + " · " + it.title)}</span>` : `<span>${t.year || ""}</span><span>${esc(it.quality || "")}</span>`}</div>
+      <div class="m">${it.kind === "episode" ? `<span>${esc(epLabel(it) + " · " + it.title)}</span>` : `<span>${esc(t.year || "")}</span><span>${esc(it.quality || "")}</span>`}</div>
       <div class="s">${esc(it.overview || t.overview || "")}</div></div>
     <div class="pl-center" id="pl-wait"><div class="spinner"></div><span id="pl-wait-t">Abrindo</span><small id="pl-wait-s"></small></div>
     <div class="pl-jump l" id="pl-jl">−10</div><div class="pl-jump r" id="pl-jr">+10</div>
