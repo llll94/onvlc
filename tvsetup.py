@@ -382,13 +382,25 @@ class Setup(QObject):
     def _authorize(self, box, alive):
         """adb connect: na primeira vez a TV pergunta se confia neste PC."""
         self.put(install={"phase": "allow"})
-        t0 = time.time()
+        t0 = last_ask = time.time()
+        box.run("disconnect", box.serial, timeout=5)  # conexão nova = a TV pergunta agora (não numa conexão velha)
         while alive() and time.time() - t0 < 180:
             box.run("connect", box.serial, timeout=10)
             state = box.run("-s", box.serial, "get-state", timeout=5)
             if state == "device":
                 self._push_apk(box, alive)
                 return
+            # a pergunta só aparece quando a conexão abre: sem resposta em 12 s (tela apagada, outra janela na
+            # frente, a pessoa não viu), acorda a tela pelo controle virtual e abre a conexão de novo
+            if time.time() - last_ask > 12:
+                last_ask = time.time()
+                try:
+                    self._ensure_remote()
+                    self.remote.key("WAKEUP")
+                except Exception:
+                    pass
+                box.run("disconnect", box.serial, timeout=5)
+                self.set(install={"asked": int(time.time() - t0)})
             time.sleep(2)
         if alive():
             self.put(install={"phase": "error", "msg": "A TV não deu permissão. Confira se apareceu a pergunta "

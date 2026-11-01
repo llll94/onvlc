@@ -386,7 +386,7 @@ Item {
                     Task {
                         s: inst.s(3); title: "Permitir este PC"
                         body: inst.at === 3 ? "Na TV, marque <b>Sempre permitir deste computador</b> e aperte <b>OK</b>." : ""
-                        Waiting { visible: inst.at === 3; label: "Esperando a permissão…" }
+                        Waiting { visible: inst.at === 3; label: inst.i.asked ? "Pedi de novo na TV. Esperando a permissão…" : "Esperando a permissão…" }
                     }
                     Task {
                         s: inst.s(4); title: "Instalar o onVLC"
