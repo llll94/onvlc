@@ -93,17 +93,22 @@ def trim(internal):
 
 
 def copy_vlc(dest):
-    """O motor do VLC (libvlc + plugins) vai dentro do onVLC: quem instala não precisa ter o VLC."""
-    if not (VLC_SRC / "libvlc.dll").is_file():
-        sys.exit(f"VLC não encontrado em {VLC_SRC} (winget install VideoLAN.VLC)")
-    dest.mkdir(exist_ok=True)
-    for name in ("libvlc.dll", "libvlccore.dll", "COPYING.txt"):
-        shutil.copy2(VLC_SRC / name, dest / name)
-    shutil.copytree(VLC_SRC / "plugins", dest / "plugins", dirs_exist_ok=True,
-                    ignore=lambda d, names: [n for n in names if Path(d) == VLC_SRC / "plugins" and n in VLC_PLUGINS_DROP]
-                    + [n for n in names if n == "plugins.dat"])
-    # a lista de plugins pronta (sem ela o VLC lê todos a cada abertura): feita para esta pasta
-    subprocess.run([str(VLC_SRC / "vlc-cache-gen.exe"), str(dest / "plugins")], check=True, capture_output=True)
+    """O motor do VLC (libvlc + plugins) vai dentro do onVLC: quem instala não precisa ter o VLC. Montado a partir do
+    VLC instalado neste PC e guardado em build\vlc; sem o VLC instalado, usa o que ficou guardado."""
+    cache = ROOT / "build" / "vlc"
+    if (VLC_SRC / "libvlc.dll").is_file():
+        shutil.rmtree(cache, ignore_errors=True)
+        cache.mkdir(parents=True)
+        for name in ("libvlc.dll", "libvlccore.dll", "COPYING.txt"):
+            shutil.copy2(VLC_SRC / name, cache / name)
+        shutil.copytree(VLC_SRC / "plugins", cache / "plugins",
+                        ignore=lambda d, names: [n for n in names if Path(d) == VLC_SRC / "plugins" and n in VLC_PLUGINS_DROP]
+                        + [n for n in names if n == "plugins.dat"])
+        # a lista de plugins pronta (sem ela o VLC lê todos a cada abertura): feita para esta pasta
+        subprocess.run([str(VLC_SRC / "vlc-cache-gen.exe"), str(cache / "plugins")], check=True, capture_output=True)
+    elif not (cache / "libvlc.dll").is_file():
+        sys.exit(f"VLC não encontrado em {VLC_SRC} nem guardado em {cache} (winget install VideoLAN.VLC)")
+    shutil.copytree(cache, dest, dirs_exist_ok=True)
     size = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file())
     print(f"VLC: {dest} ({size / 2**20:.0f} MB)")
 
