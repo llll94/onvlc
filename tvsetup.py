@@ -86,6 +86,11 @@ if ($a) {{
 
 
 def tv_app_version(box):
+    """Versão do app na TV para quem está usando ela (0 = não tem). A TV pode ter mais de um usuário (a Mi Box tem
+    o dono e um "new_user"): desinstalar pelas Configurações tira só do usuário atual, e o dumpsys continua mostrando
+    a versão dos outros. Por isso confere antes se o app existe para o usuário atual."""
+    if tvstream.APP_PKG not in box.shell(f"pm list packages --user current {tvstream.APP_PKG}"):
+        return 0
     m = re.search(r"versionCode=(\d+)", box.shell(f"dumpsys package {tvstream.APP_PKG} | grep -m1 versionCode="))
     return int(m.group(1)) if m else 0
 
@@ -115,7 +120,8 @@ def install_apk(box, progress=lambda p: None):
     if p.returncode != 0:
         return False, "O app não chegou na TV. A rede caiu? Tente de novo."
     progress(100)
-    out = box.shell(f"pm install -r {tmp}", timeout=180)  # o exec-in não devolveria o "Success"
+    # --user current: instala para quem está usando a TV (o exec-in não devolveria o "Success")
+    out = box.shell(f"pm install -r --user current {tmp}", timeout=180)
     box.shell(f"rm -f {tmp}")
     log.info("instalar na TV: %s", out.strip()[:300])
     if "Success" in out:
