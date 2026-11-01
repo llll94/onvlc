@@ -125,8 +125,9 @@ def main():
     if not ks.exists():  # só na primeira vez: um app instalado com outra chave não aceita atualização
         pw = secrets.token_urlsafe(24)
         ks.parent.mkdir(parents=True, exist_ok=True)
-        run(jdk / "bin" / "keytool.exe", "-genkeypair", "-keystore", ks, "-alias", "tvcache", "-storepass", pw,
-            "-keypass", pw, "-dname", "CN=Lucas", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000")
+        run(jdk / "bin" / "keytool.exe", "-genkeypair", "-keystore", ks, "-alias", "onvlc", "-storepass:env", "ONVLC_KS",
+            "-keypass:env", "ONVLC_KS", "-dname", "CN=onVLC", "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
+            env=dict(env, ONVLC_KS=pw))
         keyring.set_password("onVLC", "apk_keystore", pw)
     if not pw:
         sys.exit("Senha da chave do APK não está no Gerenciador de Credenciais (onVLC / apk_keystore)")

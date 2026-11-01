@@ -202,8 +202,9 @@ def main():
     shutil.copy2(ROOT / "ui" / "icon.ico", ico)
     for folder in (DESKTOP, START_MENU):
         lnk = folder / f"{NAME}.lnk"
-        ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}');"
-              f"$s.TargetPath='{exe}';$s.WorkingDirectory='{exe.parent}';$s.IconLocation='{ico},0';$s.Save()")
+        q = lambda s: str(s).replace("'", "''")  # noqa: E731  (aspas simples dentro de '…' do PowerShell)
+        ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{q(lnk)}');"
+              f"$s.TargetPath='{q(exe)}';$s.WorkingDirectory='{q(exe.parent)}';$s.IconLocation='{q(ico)},0';$s.Save()")
         subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True)
         print("atalho:", lnk)
     subprocess.run(["ie4uinit.exe", "-show"], capture_output=True)  # Windows relê os ícones

@@ -15,6 +15,32 @@ import os
 
 LIB_DIR = Path(os.environ.get("ONVLC_LIBRARY") or Path.home() / "Videos" / "onVLC")
 PORT = 8780
+# o segredo que a biblioteca cria na primeira execução; todo pedido a ela (menos /api/hello) leva esse valor no
+# cabeçalho X-onVLC-Key. A TV recebe o mesmo valor pelo assistente.
+SECRET_F = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "onVLC" / "library" / "secret"
+HOST = f"http://127.0.0.1:{PORT}"
+
+
+def key():
+    try:
+        return SECRET_F.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def request(path, data=None, timeout=5):
+    """Pedido à biblioteca, já com a chave. `data` (dict) vira POST em JSON. Devolve a resposta aberta."""
+    headers = {"X-onVLC-Key": key()}
+    body = None
+    if data is not None:
+        body = json.dumps(data).encode()
+        headers["Content-Type"] = "application/json"
+    return urllib.request.urlopen(urllib.request.Request(HOST + path, data=body, headers=headers), timeout=timeout)
+
+
+def get_json(path, timeout=5):
+    with request(path, timeout=timeout) as r:
+        return json.load(r)
 ROOT = Path(__file__).resolve().parent
 log = logging.getLogger("onvlc.lib")
 

@@ -21,6 +21,8 @@ import urllib.request
 from ctypes import wintypes
 from pathlib import Path
 
+import library
+
 VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv", ".ts", ".m2ts", ".mpg", ".mpeg"}
 SUB_EXTS = {".srt", ".ass", ".ssa", ".vtt", ".sub", ".idx"}
 NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW: ffmpeg sem janela preta
@@ -94,8 +96,8 @@ class LibraryFolder:
         known, running, summary = {}, False, ""
         try:
             # com o painel aberto isto roda a cada 3 s: sem mudança, a biblioteca só responde "304, igual"
-            req = urllib.request.Request("http://127.0.0.1:8780/api/library",
-                                         headers={"If-None-Match": self._etag} if self._etag else {})
+            req = urllib.request.Request(library.HOST + "/api/library",
+                                         headers={"X-onVLC-Key": library.key(), **({"If-None-Match": self._etag} if self._etag else {})})
             try:
                 with urllib.request.urlopen(req, timeout=2) as r:
                     self._lib, self._etag = json.load(r), r.headers.get("ETag") or ""

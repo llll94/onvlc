@@ -77,6 +77,7 @@ Item {
             index(JSON.parse(x.responseText))
         }
         x.open("GET", api + "/api/library")
+        x.setRequestHeader("X-onVLC-Key", player.libraryKey())
         if (etag) x.setRequestHeader("If-None-Match", etag)
         x.send()
     }

@@ -10,6 +10,11 @@ import tempfile
 import time
 import winreg
 from pathlib import Path
+from xml.sax.saxutils import escape
+
+SYS32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+SCHTASKS = str(SYS32 / "schtasks.exe")  # caminhos completos: um .exe com o mesmo nome na pasta atual não vale
+TASKKILL = str(SYS32 / "taskkill.exe")
 
 NAME = "onVLC"
 PROG_ID = "PlayerLucas.Video"  # mantido: é por ele que o Windows lembra a escolha de app padrão
@@ -79,28 +84,28 @@ def start_with_windows(lib_exe):
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>Mantém a biblioteca do onVLC aberta para a TV achar o PC</Description></RegistrationInfo>
   <Triggers>
-    <LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId></LogonTrigger>
+    <LogonTrigger><Enabled>true</Enabled><UserId>{escape(user)}</UserId></LogonTrigger>
     <TimeTrigger>
       <StartBoundary>{start}</StartBoundary><Enabled>true</Enabled>
       <Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
     </TimeTrigger>
     <EventTrigger><Enabled>true</Enabled><Subscription>{resume}</Subscription></EventTrigger>
   </Triggers>
-  <Principals><Principal id="Author"><UserId>{user}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Principals><Principal id="Author"><UserId>{escape(user)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit><StartWhenAvailable>true</StartWhenAvailable><Hidden>true</Hidden>
     <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>
   </Settings>
-  <Actions Context="Author"><Exec><Command>{lib_exe}</Command><WorkingDirectory>{lib_exe.parent}</WorkingDirectory></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>{escape(str(lib_exe))}</Command><WorkingDirectory>{escape(str(lib_exe.parent))}</WorkingDirectory></Exec></Actions>
 </Task>
 """
     fd, tmp = tempfile.mkstemp(suffix=".xml")
     os.close(fd)
     try:
         Path(tmp).write_text(xml, encoding="utf-16")
-        r = subprocess.run(["schtasks", "/Create", "/TN", TASK, "/XML", tmp, "/F"], capture_output=True, text=True,
+        r = subprocess.run([SCHTASKS, "/Create", "/TN", TASK, "/XML", tmp, "/F"], capture_output=True, text=True,
                            creationflags=NO_WINDOW)
     finally:
         os.unlink(tmp)
@@ -113,19 +118,19 @@ def start_with_windows(lib_exe):
 
 
 def run_task():
-    subprocess.run(["schtasks", "/Run", "/TN", TASK], capture_output=True, creationflags=NO_WINDOW)
+    subprocess.run([SCHTASKS, "/Run", "/TN", TASK], capture_output=True, creationflags=NO_WINDOW)
 
 
 def resume_task():
     """Liga a tarefa de novo (depois do stop_task) e abre a biblioteca."""
-    subprocess.run(["schtasks", "/Change", "/TN", TASK, "/ENABLE"], capture_output=True, creationflags=NO_WINDOW)
+    subprocess.run([SCHTASKS, "/Change", "/TN", TASK, "/ENABLE"], capture_output=True, creationflags=NO_WINDOW)
     run_task()
 
 
 def stop_task():
     """Pausa a tarefa e fecha a biblioteca (antes de trocar ou apagar os arquivos)."""
-    subprocess.run(["schtasks", "/Change", "/TN", TASK, "/DISABLE"], capture_output=True, creationflags=NO_WINDOW)
-    subprocess.run(["taskkill", "/IM", LIB_EXE, "/F"], capture_output=True, creationflags=NO_WINDOW)
+    subprocess.run([SCHTASKS, "/Change", "/TN", TASK, "/DISABLE"], capture_output=True, creationflags=NO_WINDOW)
+    subprocess.run([TASKKILL, "/IM", LIB_EXE, "/F"], capture_output=True, creationflags=NO_WINDOW)
 
 
 def register_all(exe):
@@ -138,8 +143,8 @@ def register_all(exe):
 
 def unregister():
     """O contrário do register_all (o desinstalador chama). Filmes, posições e a pasta Vídeos\\onVLC ficam."""
-    subprocess.run(["schtasks", "/Delete", "/TN", TASK, "/F"], capture_output=True, creationflags=NO_WINDOW)
-    subprocess.run(["taskkill", "/IM", LIB_EXE, "/F"], capture_output=True, creationflags=NO_WINDOW)
+    subprocess.run([SCHTASKS, "/Delete", "/TN", TASK, "/F"], capture_output=True, creationflags=NO_WINDOW)
+    subprocess.run([TASKKILL, "/IM", LIB_EXE, "/F"], capture_output=True, creationflags=NO_WINDOW)
     _delete_value(r"Software\Microsoft\Windows\CurrentVersion\Run", TASK)
     _delete_value(r"Software\RegisteredApplications", NAME)
     for ext in VIDEO_EXTS:

@@ -15,10 +15,14 @@ import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+import library
 import tvdevices
 
-APP_PKG = "com.lucas.tvcache"
+APP_PKG = "app.onvlc.tv"
 APP_ACTIVITY = APP_PKG + "/.LibraryActivity"
+# tudo o que o PC pede ao app da TV passa pela PairActivity, que só o adb pode abrir (permissão DUMP) e que
+# confere a chave: outro app na TV não consegue mandar o onVLC tocar, parar ou trocar de PC
+PAIR_ACTIVITY = APP_PKG + "/.PairActivity"
 NO_WINDOW = 0x08000000
 CHUNK = 1024 * 1024
 log = logging.getLogger("onvlc.tv")
@@ -92,6 +96,13 @@ def find_adb():
     pkgs = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages"
     hits = list(pkgs.glob("Google.PlatformTools*/platform-tools/adb.exe"))
     return str(hits[0]) if hits else ""
+
+
+def local_ip_to(ip):
+    """O IP deste PC na rede da TV (a TV usa esse endereço para falar com a biblioteca)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.connect((ip, 9))
+        return s.getsockname()[0]
 
 
 def _q(s):
@@ -230,19 +241,32 @@ class TVBox:
                 time.sleep(1)
         return False
 
+    def close(self):
+        """Fecha o servidor do adb que ficou aberto (só se o adb foi usado nesta sessão)."""
+        if self._adb:
+            try:
+                self.run("kill-server", timeout=5)
+            except Exception:
+                pass
+
     def wake_screen(self):
         # acorda a tela; pelo HDMI-CEC a TV liga junto (e a tela inicial do Google TV vem para frente)
         self.shell("input keyevent KEYCODE_WAKEUP")
 
+    def pc_args(self):
+        """Onde está a biblioteca deste PC e a chave dela, para o app da TV (sempre juntos no am start)."""
+        ip = local_ip_to(self.ip)
+        return f"--es pc {_q(f'http://{ip}:{library.PORT}')} --es key {_q(library.key())}"
+
     def open_library(self, video_id, pos_ms):
         """Pede para o app onVLC tocar um vídeo da biblioteca a partir de pos_ms."""
-        out = self.shell(f"am start -n {APP_ACTIVITY} --es play {_q(video_id)} --el pos {int(pos_ms)}")
+        out = self.shell(f"am start -n {PAIR_ACTIVITY} {self.pc_args()} --es play {_q(video_id)} --el pos {int(pos_ms)}")
         log.info("abrindo na TV em %ds: %s", pos_ms // 1000, out.replace("\n", " ")[:200])
         return out
 
     def stop_library(self):
         """Para o filme que o app onVLC está tocando (ele manda a posição para a biblioteca)."""
-        self.shell(f"am start -n {APP_ACTIVITY} --ez stop true")
+        self.shell(f"am start -n {PAIR_ACTIVITY} {self.pc_args()} --ez stop true")
 
     def app_in_front(self, timeout=8):
         """Espera o app onVLC aparecer na tela (ao acordar, a tela inicial do Google TV pode passar por cima)."""

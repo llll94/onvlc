@@ -33,6 +33,7 @@ from PySide6.QtGui import QColor, QIcon, QPalette, QSurfaceFormat  # noqa: E402
 from PySide6.QtQuick import QQuickView, QQuickWindow, QSGRendererInterface  # noqa: E402
 from PySide6.QtWidgets import QApplication, QFileDialog, QWidget  # noqa: E402
 
+import library  # noqa: E402
 import opensubs  # noqa: E402
 import thumbs  # noqa: E402
 import tvfolder  # noqa: E402
@@ -223,6 +224,7 @@ class Player(QObject):
         self.settings.setValue("vol", self.vol)
         self.timer.stop()
         self.mp.stop()
+        self.box.close()  # fecha o servidor do adb, se foi usado: outro programa não herda a conexão com a TV
         self.overlay.close()
         self.app.quit()
 
@@ -346,8 +348,7 @@ class Player(QObject):
             while self.path == path:
                 try:
                     q = urllib.parse.urlencode({"path": path, "dur": f"{dur:.1f}"})
-                    with urllib.request.urlopen(f"http://127.0.0.1:8780/api/thumbs?{q}", timeout=5) as r:
-                        d = json.load(r)
+                    d = library.get_json(f"/api/thumbs?{q}")
                 except Exception:
                     if self.lib_thumbs is None and self.path == path:
                         log.info("miniaturas: biblioteca fora, o player faz")
@@ -369,8 +370,7 @@ class Player(QObject):
         def work():
             try:
                 q = urllib.parse.urlencode({"path": path})
-                with urllib.request.urlopen(f"http://127.0.0.1:8780/api/media?{q}", timeout=5) as r:
-                    subs = json.load(r).get("subs") or []
+                subs = library.get_json(f"/api/media?{q}").get("subs") or []
                 found = [{"name": s["name"], "path": s["path"], "where": Path(s["path"]).name} for s in subs]
             except Exception:  # biblioteca desligada: procura aqui mesmo, como antes
                 found = self._find_subs(path)
@@ -446,9 +446,7 @@ class Player(QObject):
         """Vídeo da pasta da biblioteca visto até o fim aqui no PC: entra nos "assistidos" da TV também."""
         def send():
             try:
-                req = urllib.request.Request("http://127.0.0.1:8780/api/watched", data=json.dumps({"path": path}).encode(),
-                                             headers={"Content-Type": "application/json"})
-                urllib.request.urlopen(req, timeout=3).read()
+                library.request("/api/watched", {"path": path}, timeout=3).read()
             except Exception:
                 pass  # biblioteca desligada: tudo bem
         threading.Thread(target=send, daemon=True).start()
@@ -524,21 +522,19 @@ class Player(QObject):
 
     # ---------- legendas da internet ----------
     def _secret(self, name):
-        if keyring:
-            try:
-                return keyring.get_password("onVLC", name) or ""
-            except Exception:
-                pass
-        return self.settings.value("secret/" + name, "")
+        """Só do Gerenciador de Credenciais do Windows (cifrado). Sem ele, não há segredo: nunca cai para o registro."""
+        if not keyring:
+            return ""
+        try:
+            return keyring.get_password("onVLC", name) or ""
+        except Exception:
+            log.exception("Gerenciador de Credenciais")
+            return ""
 
     def _set_secret(self, name, value):
-        if keyring:
-            try:
-                keyring.set_password("onVLC", name, value)
-                return
-            except Exception:
-                pass
-        self.settings.setValue("secret/" + name, value)
+        if not keyring:
+            raise RuntimeError("Sem acesso ao Gerenciador de Credenciais do Windows: a senha não foi guardada")
+        keyring.set_password("onVLC", name, value)
 
     def _client(self):
         key = self._secret("api_key")
@@ -551,11 +547,15 @@ class Player(QObject):
 
     @Slot(str, str, str)
     def saveAccount(self, key, user, password):
-        if key.strip():
-            self._set_secret("api_key", key.strip())
+        try:
+            if key.strip():
+                self._set_secret("api_key", key.strip())
+            if password:
+                self._set_secret("password", password)
+        except Exception as e:
+            self.toast.emit(str(e))
+            return
         self.settings.setValue("osUser", user.strip())
-        if password:
-            self._set_secret("password", password)
         self.os_client = None
         self.os_configured = bool(self._secret("api_key"))
         self.webSearch()
@@ -618,7 +618,7 @@ class Player(QObject):
     def _save_sub(self, data, lang):
         """Salva ao lado do vídeo; se a pasta não deixar, salva em %APPDATA%\\onVLC\\legendas."""
         video = Path(self.path)
-        tag = lang or "sub"
+        tag = lang if re.fullmatch(r"[A-Za-z-]{2,8}", lang or "") else "sub"  # vem da internet: nada de \ ou /
         for folder in (video.parent, Path(os.environ.get("APPDATA", str(Path.home()))) / "onVLC" / "legendas"):
             try:
                 folder.mkdir(parents=True, exist_ok=True)
@@ -729,8 +729,7 @@ class Player(QObject):
     @staticmethod
     def _library_items():
         """Todos os vídeos que a biblioteca conhece (filmes e episódios), com id, caminho e posição."""
-        with urllib.request.urlopen("http://127.0.0.1:8780/api/library", timeout=3) as r:
-            lib = json.load(r)
+        lib = library.get_json("/api/library", timeout=3)
         return list(lib["movies"]) + [e for s in lib["shows"] for se in s["seasons"] for e in se["episodes"]]
 
     @staticmethod
@@ -1054,6 +1053,11 @@ class Player(QObject):
     @Slot()
     def close(self):
         self.win.close()
+
+    @Slot(result=str)
+    def libraryKey(self):
+        """A chave da biblioteca, para a tela Library.qml pôr no cabeçalho dos pedidos."""
+        return library.key()
 
     @Slot()
     def startMove(self):

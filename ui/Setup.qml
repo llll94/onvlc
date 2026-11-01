@@ -41,9 +41,14 @@ Item {
     }
 
     // ---------- componentes ----------
+    // Txt: textos fixos da tela, com <b>. Para o que vem de fora (TV, rede, erros) usar Plain, que não interpreta HTML.
     component Txt: Text {
         color: wiz.mute; font.family: wiz.font; font.pixelSize: 15; wrapMode: Text.Wrap; lineHeight: 1.15
         textFormat: Text.StyledText; linkColor: wiz.fg
+    }
+    component Plain: Text {
+        color: wiz.mute; font.family: wiz.font; font.pixelSize: 15; wrapMode: Text.Wrap; lineHeight: 1.15
+        textFormat: Text.PlainText
     }
     component Title: Text {
         color: wiz.fg; font.family: wiz.font; font.pixelSize: 26; font.weight: Font.Bold; wrapMode: Text.Wrap
@@ -130,7 +135,7 @@ Item {
             width: 26; height: 26; radius: 13; color: wiz.green
             Text { anchors.centerIn: parent; text: "✓"; color: "#0b2414"; font.bold: true; font.pixelSize: 14 }
         }
-        Txt {
+        Plain {
             id: bt
             x: dot.visible ? 52 : 14; width: parent.width - x - 14
             anchors.verticalCenter: parent.verticalCenter
@@ -171,7 +176,7 @@ Item {
                 Text { text: tk.title; color: wiz.fg; font.family: wiz.font; font.pixelSize: 15; font.weight: Font.DemiBold }
                 Text { visible: tk.s === "now" && !tk.body; text: "testando…"; color: wiz.mute; font.family: wiz.mono; font.pixelSize: 13; anchors.baseline: parent.children[0].baseline }
             }
-            Txt { visible: !!tk.value; width: parent.width; text: tk.value; font.family: wiz.mono; font.pixelSize: 13 }
+            Plain { visible: !!tk.value; width: parent.width; text: tk.value; font.family: wiz.mono; font.pixelSize: 13 }
             Txt { visible: !!tk.body; width: parent.width; text: tk.body; font.pixelSize: 14 }
             Column { id: more; width: parent.width; spacing: 8; topPadding: visibleChildren.length ? 6 : 0 }
         }
@@ -411,7 +416,7 @@ Item {
                                                 : "O app abre na TV já com o endereço deste PC."
                 }
                 Waiting { visible: conn.c.phase !== "ok" && conn.c.phase !== "error"; label: "Conectando…" }
-                Box { visible: conn.c.phase === "ok"; text: "<b>" + (st.tvName || "TV") + "</b>  ↔  <b>" + (st.pcName || "") + "</b>" }
+                Box { visible: conn.c.phase === "ok"; text: (st.tvName || "TV") + "  ↔  " + (st.pcName || "") }
                 Box { visible: conn.c.phase === "error"; kind: "help"; text: conn.c.msg || "" }
                 Button { visible: conn.c.phase === "error"; label: "Tentar de novo"; onClicked: setup.retryConnect() }
             }
@@ -526,7 +531,7 @@ Item {
                     }
                 }
                 Box { visible: !leg.o.available; kind: "help"; text: "As legendas automáticas ainda não estão disponíveis nesta versão do onVLC. Dá para pular: quando estiverem, aparecem em Configurações." }
-                Box { visible: leg.o.available && (leg.o.phase === "ok" || (leg.o.has && leg.o.phase !== "error")); text: "Conectado como <b>" + (leg.o.user || "") + "</b>." }
+                Box { visible: leg.o.available && (leg.o.phase === "ok" || (leg.o.has && leg.o.phase !== "error")); text: "Conectado como " + (leg.o.user || "") + "." }
                 Column {
                     visible: leg.o.available && leg.o.phase !== "ok" && !leg.o.has; width: parent.width; spacing: 12
                     Txt { width: parent.width; font.pixelSize: 14; text: "Use sua conta grátis do <b>opensubtitles.com</b>. Sem conta, o site deixa baixar pouquíssimas legendas por dia." }
@@ -542,7 +547,7 @@ Item {
                 visible: wiz.step === 8; width: parent.width; spacing: 16
                 Title { width: parent.width; text: "Tudo pronto" }
                 Repeater {
-                    model: [[st.hasTv, st.hasTv ? "onVLC instalado e conectado na <b>" + (st.tvName || "TV") + "</b>" : "Nenhuma TV ligada ainda"],
+                    model: [[st.hasTv, st.hasTv ? "onVLC instalado e conectado na " + (st.tvName || "TV") : "Nenhuma TV ligada ainda"],
                             [st.test && st.test.seen === true, "Teste de imagem, som e rede"],
                             [st.tmdb && st.tmdb.has, st.tmdb && st.tmdb.has ? "Capas e sinopses (TMDB)" : "Capas e sinopses: dá para ligar depois no menu da TV"],
                             [st.os && st.os.has, st.os && st.os.has ? "Legendas automáticas (OpenSubtitles)" : "Legendas automáticas: dá para ligar depois no menu da TV"]]
@@ -554,7 +559,7 @@ Item {
                             color: modelData[0] ? wiz.green : wiz.panel2; border.color: modelData[0] ? wiz.green : wiz.line
                             Text { anchors.centerIn: parent; text: modelData[0] ? "✓" : "–"; color: modelData[0] ? "#0b2414" : wiz.dim; font.bold: true; font.pixelSize: 11 }
                         }
-                        Txt { text: modelData[1]; color: wiz.fg; wrapMode: Text.NoWrap }
+                        Plain { text: modelData[1]; color: wiz.fg; wrapMode: Text.NoWrap }
                     }
                 }
                 Txt { width: parent.width; text: "Coloque filmes e séries em <b>Vídeos\\onVLC</b>. Eles aparecem na TV em segundos, e o filme continua de onde parou em qualquer tela." }

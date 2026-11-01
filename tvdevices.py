@@ -140,7 +140,8 @@ def arp_mac(ip):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.sendto(b"", (ip, 9))  # garante que o IP está na tabela
         time.sleep(0.3)
-        out = subprocess.run(["arp", "-a", ip], capture_output=True, text=True, timeout=5,
+        arp = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "arp.exe")  # caminho completo: nada da pasta atual
+        out = subprocess.run([arp, "-a", ip], capture_output=True, text=True, timeout=5,
                              creationflags=NO_WINDOW, errors="replace").stdout
         m = re.search(r"(?:[0-9a-f]{2}-){5}[0-9a-f]{2}", out, re.I)
         return m.group(0).upper() if m else ""

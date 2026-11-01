@@ -102,6 +102,8 @@ class Client:
         link = info.get("link")
         if not link:
             raise OSError_(info.get("message") or "Não consegui baixar essa legenda")
+        if urllib.parse.urlparse(link).scheme != "https":  # a API devolve o endereço; só https (nunca file: ou http:)
+            raise OSError_("O OpenSubtitles devolveu um endereço estranho para a legenda")
         try:
             with urllib.request.urlopen(urllib.request.Request(link, headers={"User-Agent": USER_AGENT}), timeout=30) as r:
                 return r.read(), info.get("remaining")
