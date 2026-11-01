@@ -37,11 +37,14 @@
             </intent-filter>
         </activity>
 
-        <!-- pedidos do PC (onde ele está + chave, tocar, parar, teste): só o adb abre (permissão DUMP, do shell) -->
+        <!-- pedidos do PC (onde ele está + chave, tocar, parar, teste): só o adb abre (permissão DUMP, do shell).
+             taskAffinity vazia: cada pedido abre esta tela de novo numa tarefa própria (se ela fosse a raiz da
+             tarefa da biblioteca, o Android só traria o app para frente e o pedido seguinte se perderia) -->
         <activity
             android:name=".PairActivity"
             android:exported="true"
             android:permission="android.permission.DUMP"
+            android:taskAffinity=""
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
