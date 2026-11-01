@@ -143,6 +143,14 @@ Wi-Fi PC→Mi Box ~250 Mbps. Miniaturas: 200 em ~35 s no 4K. Kit de abertura: 66
   velho que o do pacote, o PC atualiza antes de abrir (etapa "Atualizando o onVLC da TV", `tvsetup.install_apk`).
 - Instalador testado neste PC numa pasta de teste (instalou em 14 s, biblioteca rodando de lá, desinstalou limpo) e o
   VLC de dentro do pacote tocou 4K HDR/HEVC/x264 igual ao instalado. Depois o `build.py` devolveu tudo para `dist\onVLC`.
+- **Teste de usuário do Lucas (01/11), pelo instalador, com o app da TV desinstalado:** deu certo depois de 3 correções:
+  1ª abertura do player na TV leva ~35 s (o motor monta a lista de fontes) e o teste desistia em 30 s; a pergunta
+  "viu e ouviu" nunca aparecia (`None` do Python vira `undefined` no QML); a pergunta "Permitir depuração USB?" só aparece
+  ao abrir a conexão (agora reabre a cada 12 s e acorda a tela); a Mi Box tem 2 usuários (dono e `new_user`) e desinstalar
+  tira só do atual, então `tv_app_version` confere `pm list packages --user current` e instala com `--user current`.
+- O PC do Lucas agora usa o onVLC **instalado** (`%LOCALAPPDATA%\Programs\onVLC`), não o `dist`. Backups dos testes em
+  `%LOCALAPPDATA%\onVLCackup-teste*-2026-11-01`. O VLC foi desinstalado do PC: o build usa o motor guardado em `buildlc`.
+- Próximo: o Lucas vai testar na casa da mãe (outro PC e outra TV).
 - O instalador ainda não foi publicado em lugar nenhum (fica em `dist\instalar-onVLC.exe`; o repositório é privado).
 - Ainda não testado: o passo a passo da depuração (a Mi Box já tem ligada), o erro de código, TMDB/OpenSubtitles pelas telas.
 
