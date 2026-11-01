@@ -5,6 +5,7 @@ tela (cada etapa numa thread; voltar ou trocar de etapa cancela o que estava rod
 Etapas (iguais ao protótipo): 0 início · 1 achar a TV · 2 código · 3 instalar · 4 conectar · 5 teste · 6 capas ·
 7 legendas · 8 pronto.
 """
+import base64
 import json
 import logging
 import os
@@ -48,34 +49,43 @@ def bundled_apk():
     return apk, code
 
 
-def local_ip_to(ip):
-    """O IP deste PC na rede da TV (a TV usa esse endereço para falar com a biblioteca)."""
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        s.connect((ip, 9))
-        return s.getsockname()[0]
+local_ip_to = tvstream.local_ip_to
 
 
 def lib_json(path, data=None, timeout=4):
-    req = urllib.request.Request(LIB + path, data=json.dumps(data).encode() if data is not None else None,
-                                 headers={"Content-Type": "application/json"} if data is not None else {})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    """Pedido à biblioteca deste PC, com a chave (library.request)."""
+    with library.request(path, data, timeout=timeout) as r:
         body = r.read()
         return json.loads(body) if body else {}
 
 
+# PowerShell sempre pelo caminho completo: um powershell.exe na pasta atual (a do vídeo aberto) não vale
+PS_EXE = str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+
+
 def _ps(cmd, timeout=20):
-    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd], capture_output=True, text=True,
+    r = subprocess.run([PS_EXE, "-NoProfile", "-NonInteractive", "-Command", cmd], capture_output=True, text=True,
                        timeout=timeout, creationflags=NO_WINDOW, encoding="utf-8", errors="replace")
     return r.stdout.strip()
 
 
+def _ipv4(s):
+    """Só um IPv4 em texto entra em comando: qualquer outra coisa vira erro antes."""
+    if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", s or ""):
+        raise ValueError("endereço inválido")
+    return s
+
+
 def wol_state(pc_ip):
-    """A placa de rede por onde a TV chega neste PC: nome, se acorda pela rede e se é Wi-Fi."""
-    out = _ps(f"""$a = Get-NetIPAddress -IPAddress '{pc_ip}' -ErrorAction SilentlyContinue | Get-NetAdapter
+    """A placa de rede por onde a TV chega neste PC: nome, índice, se acorda pela rede, se é Wi-Fi e o perfil
+    da rede no Windows ("Public" = a TV não consegue chegar; o firewall só libera em rede Particular)."""
+    out = _ps(f"""$a = Get-NetIPAddress -IPAddress '{_ipv4(pc_ip)}' -ErrorAction SilentlyContinue | Get-NetAdapter
 if ($a) {{
   $p = Get-NetAdapterAdvancedProperty -Name $a.Name -RegistryKeyword '*WakeOnMagicPacket' -ErrorAction SilentlyContinue
   $w = Get-NetAdapterPowerManagement -Name $a.Name -ErrorAction SilentlyContinue
-  @{{ name = $a.Name; magic = "$($p.RegistryValue)"; wake = "$($w.WakeOnMagicPacket)"; wifi = ($a.NdisPhysicalMedium -eq 9) }} | ConvertTo-Json -Compress
+  $c = Get-NetConnectionProfile -InterfaceIndex $a.ifIndex -ErrorAction SilentlyContinue
+  @{{ name = $a.Name; ifIndex = $a.ifIndex; magic = "$($p.RegistryValue)"; wake = "$($w.WakeOnMagicPacket)";
+     wifi = ($a.NdisPhysicalMedium -eq 9); profile = "$($c.NetworkCategory)" }} | ConvertTo-Json -Compress
 }}""")
     try:
         d = json.loads(out)
@@ -83,6 +93,20 @@ if ($a) {{
         return None
     d["ok"] = d.get("magic") in ("1", "") and d.get("wake") in ("Enabled", "")
     return d
+
+
+def net_profile(pc_ip):
+    """"Public", "Private", "DomainAuthenticated" ou "" (não deu para saber)."""
+    w = wol_state(pc_ip)
+    return (w or {}).get("profile", "")
+
+
+def run_elevated(script, timeout=120):
+    """Roda um script do PowerShell como administrador (o Windows pede confirmação). O script vai em base64
+    (-EncodedCommand): nada do conteúdo é interpretado pela linha de comando, então não há como "escapar" dele."""
+    enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    _ps(f"Start-Process -FilePath '{PS_EXE}' -Verb RunAs -Wait -WindowStyle Hidden "
+        f"-ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','{enc}'", timeout=timeout)
 
 
 def tv_app_version(box):
@@ -437,7 +461,8 @@ class Setup(QObject):
             self.put(conn={"phase": "error", "msg": "A TV não respondeu. Ela está ligada?"})
             return
         t0 = time.time()
-        box.shell(f"am start -n {tvstream.APP_ACTIVITY} --es pc http://{pc_ip}:{library.PORT}")
+        # a PairActivity (só o adb abre) recebe onde o PC está e a chave da biblioteca; a TV guarda os dois
+        box.shell(f"am start -n {tvstream.PAIR_ACTIVITY} {box.pc_args()}")
         if not box.app_in_front(timeout=10):
             self.put(conn={"phase": "error", "msg": "O onVLC não abriu na TV."})
             return
@@ -454,8 +479,12 @@ class Setup(QObject):
                 return
             time.sleep(1)
         if alive():
-            self.put(conn={"phase": "error", "msg": "O app abriu, mas não achou este PC. A biblioteca do onVLC "
-                                                    "está aberta? O firewall do Windows pode estar bloqueando."})
+            msg = "O app abriu, mas não achou este PC. A biblioteca do onVLC está aberta? O firewall do Windows pode estar bloqueando."
+            if net_profile(pc_ip) == "Public":
+                msg = ("O app abriu, mas não achou este PC: esta rede está marcada como \"Pública\" no Windows, e aí o "
+                       "firewall não deixa a TV falar com o PC. Em Configurações → Rede e Internet → propriedades da "
+                       "rede, marque \"Rede particular\" e tente de novo.")
+            self.put(conn={"phase": "error", "msg": msg})
 
     @Slot()
     def retryConnect(self):
@@ -479,13 +508,13 @@ class Setup(QObject):
             # 1. a TV alcança o PC?
             row(0, "now")
             box.connect()
-            out = box.shell(f"ping -c 3 -W 2 {pc_ip}", timeout=15)
+            out = box.shell(f"ping -c 3 -W 2 {_ipv4(pc_ip)}", timeout=15)
             m = re.search(r"= [\d.]+/([\d.]+)/", out)
             row(0, "ok" if m else "bad", f"{float(m.group(1)):.0f} ms de resposta" if m else "a TV não alcança o PC")
             # 2–5. o app da TV toca o vídeo de teste e conta o que conseguiu
             row(1, "now")
             t0 = time.time()
-            box.shell(f"am start -n {tvstream.APP_ACTIVITY} --ez selftest true --es pc http://{pc_ip}:{library.PORT}")
+            box.shell(f"am start -n {tvstream.PAIR_ACTIVITY} {box.pc_args()} --ez selftest true")
             res = None
             video_at = None
             while alive() and time.time() - t0 < 180:
@@ -533,7 +562,7 @@ class Setup(QObject):
                 row(5, "warn", "não consegui ler a placa de rede")
             elif not w["ok"]:
                 row(5, "warn", "a placa de rede deste PC está configurada para não acordar pela rede")
-                self.set(test={"wolFix": w["name"]})
+                self.set(test={"wolFix": str(int(w.get("ifIndex") or 0)) if w.get("ifIndex") else ""})
             else:
                 row(5, "ok", "ligado: o botão \"Ligar o PC\" da TV vai funcionar"
                     + (" (no Wi-Fi às vezes falha)" if w.get("wifi") else ""))
@@ -544,22 +573,23 @@ class Setup(QObject):
     def fixWol(self):
         """Liga "acordar pela rede" na placa (o Windows pede confirmação de administrador)."""
         rows = list(self._st["test"].get("rows", []))
-        name = self._st["test"].get("wolFix", "")
-        if not name or len(rows) < 6:
+        try:
+            idx = int(self._st["test"].get("wolFix", ""))  # o índice da placa: um número, nunca um nome
+        except ValueError:
+            return
+        if len(rows) < 6:
             return
 
         def work(alive):
-            inner = (f"Set-NetAdapterAdvancedProperty -Name '{name}' -RegistryKeyword '*WakeOnMagicPacket' -RegistryValue 1 "
-                     f"-ErrorAction SilentlyContinue; Enable-NetAdapterPowerManagement -Name '{name}' -WakeOnMagicPacket "
-                     "-ErrorAction SilentlyContinue")
-            _ps(f"Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList "
-                f"'-NoProfile','-Command',\"{inner}\"", timeout=120)
+            run_elevated(f"$a = Get-NetAdapter -InterfaceIndex {idx} -ErrorAction Stop\n"
+                         "Set-NetAdapterAdvancedProperty -Name $a.Name -RegistryKeyword '*WakeOnMagicPacket' -RegistryValue 1 -ErrorAction SilentlyContinue\n"
+                         "Enable-NetAdapterPowerManagement -Name $a.Name -WakeOnMagicPacket -ErrorAction SilentlyContinue")
             pc_ip = local_ip_to(self._box().ip)
             w = wol_state(pc_ip)
             rows[5] = {**rows[5], "s": "ok" if w and w["ok"] else "warn",
                        "v": "ligado: o botão \"Ligar o PC\" da TV vai funcionar" if w and w["ok"]
                        else "não mudou (precisa confirmar como administrador)"}
-            self.set(test={"rows": rows, "wolFix": "" if w and w["ok"] else name})
+            self.set(test={"rows": rows, "wolFix": "" if w and w["ok"] else str(idx)})
         self._bg(work)
 
     @Slot(bool)
