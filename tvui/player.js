@@ -226,7 +226,7 @@ function plUpdate() {
   $("pl-wait").hidden = !waiting;
   if (waiting) {
     $("pl-wait-t").textContent = st.state === "opening" ? "Abrindo" : "Carregando este trecho";
-    $("pl-wait-s").textContent = st.state === "opening" ? "" : "a Mi Box está guardando os próximos minutos";
+    $("pl-wait-s").textContent = st.state === "opening" ? "" : "a TV está guardando os próximos minutos";
   }
   // pausado há um tempo: escurece e mostra o que está assistindo
   const pausedLong = plPausedLong();

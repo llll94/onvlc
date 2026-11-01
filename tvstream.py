@@ -1,7 +1,8 @@
-"""Mi Box pelo adb (Assistir na TV) e o envio de vídeo por HTTP com Range, usado pela biblioteca.
+"""A TV com Android pelo adb (Assistir na TV) e o envio de vídeo por HTTP com Range, usado pela biblioteca.
 
-"Assistir na TV" pede para o app onVLC da Mi Box (pasta android\\) tocar um vídeo da biblioteca num ponto.
+"Assistir na TV" pede para o app onVLC da TV (pasta android\\) tocar um vídeo da biblioteca num ponto.
 O app toca com o próprio motor, passando pelo cache dele, e manda a posição para a biblioteca do PC.
+Qual TV: a salva em tvs.json (tvdevices.py), pareada pelo assistente.
 """
 import logging
 import os
@@ -9,13 +10,13 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-BOX_IP = "192.168.1.31"
-BOX_MAC = "AA-BB-CC-00-00-01"
-TV_IP, TV_MAC = "192.168.1.13", "AA-BB-CC-00-00-03"  # LG C1; porta 3000 só responde com ela ligada
+import tvdevices
+
 APP_PKG = "com.lucas.tvcache"
 APP_ACTIVITY = APP_PKG + "/.LibraryActivity"
 NO_WINDOW = 0x08000000
@@ -79,29 +80,50 @@ class _Server(ThreadingHTTPServer):
         super().server_bind()
 
 
-# ---------- Mi Box ----------
+# ---------- TV ----------
+def find_adb():
+    """O adb que vai dentro do onVLC (pasta adb ao lado do .exe); rodando o .py, o instalado no PC."""
+    if getattr(sys, "frozen", False):
+        own = Path(sys.executable).with_name("adb") / "adb.exe"
+        if own.exists():
+            return str(own)
+    if shutil.which("adb"):
+        return shutil.which("adb")
+    pkgs = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages"
+    hits = list(pkgs.glob("Google.PlatformTools*/platform-tools/adb.exe"))
+    return str(hits[0]) if hits else ""
+
+
 def _q(s):
     """Aspas simples para o shell do Android."""
     return "'" + str(s).replace("'", "'\\''") + "'"
 
 
-class MiBox:
-    def __init__(self, ip=BOX_IP):
-        self.ip = ip
+class TVBox:
+    """A TV salva (ou a passada em `tv`). Lida na hora de usar: depois de parear outra TV, já vale sem reabrir."""
+
+    def __init__(self, tv=None):
+        self._fixed = tv
         self._adb = None
+
+    @property
+    def tv(self):
+        return self._fixed or tvdevices.default()
+
+    @property
+    def name(self):
+        return (self.tv or {}).get("name") or "TV"
+
+    @property
+    def ip(self):
+        return (self.tv or {}).get("ip", "")
 
     @property
     def adb(self):
         # procurado só quando a TV for usada: não atrasa a abertura do player
         if self._adb is None:
-            self._adb = shutil.which("adb") or self._winget_adb() or ""
+            self._adb = find_adb()
         return self._adb
-
-    @staticmethod
-    def _winget_adb():
-        pkgs = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages"
-        hits = list(pkgs.glob("Google.PlatformTools*/platform-tools/adb.exe"))
-        return str(hits[0]) if hits else None
 
     @property
     def serial(self):
@@ -120,7 +142,7 @@ class MiBox:
         return self.run("-s", self.serial, "shell", cmd, timeout=timeout)
 
     def online(self):
-        # um comando de verdade: logo depois de a Mi Box dormir, o adb ainda diz "device" com a conexão morta
+        # um comando de verdade: logo depois de a TV dormir, o adb ainda diz "device" com a conexão morta
         if not self._port_open():
             return False
         try:
@@ -129,32 +151,48 @@ class MiBox:
             return False
 
     def _port_open(self, ip=None, port=5555):
+        if not (ip or self.ip):
+            return False
         try:
             with socket.create_connection((ip or self.ip, port), timeout=1):
                 return True
         except OSError:
             return False
 
-    def wake_on_lan(self, mac_txt=BOX_MAC, ip=None):
-        mac = bytes(int(x, 16) for x in mac_txt.split("-"))
-        pkt = b"\xff" * 6 + mac * 16
+    def wake_on_lan(self, mac_txt=None, ip=None):
+        mac_txt = mac_txt or (self.tv or {}).get("mac", "")
         ip = ip or self.ip
+        if not mac_txt or not ip:
+            return
+        mac = bytes(int(x, 16) for x in re.split(r"[-:]", mac_txt))
+        pkt = b"\xff" * 6 + mac * 16
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             for dst in ("255.255.255.255", ip.rsplit(".", 1)[0] + ".255", ip):
                 s.sendto(pkt, (dst, 9))
 
+    @property
+    def display(self):
+        """A tela ligada na caixa por HDMI, quando dá para saber pela rede se ela está ligada (ex.: LG)."""
+        return (self.tv or {}).get("display") or {}
+
     def tv_on(self):
-        return self._port_open(TV_IP, 3000)
+        d = self.display
+        return self._port_open(d["ip"], d.get("port", 3000)) if d.get("ip") else None
 
     def ensure_tv(self, progress=lambda m: None):
-        """Liga a TV se estiver desligada: pelo HDMI-CEC da Mi Box e, se não der, pela rede."""
+        """Liga a tela se estiver desligada: pelo HDMI-CEC da caixa e, se não der, pela rede.
+        Sem tela conhecida (o normal), só pede pelo HDMI e segue."""
+        if self.tv_on() is None:
+            self.shell("cmd hdmi_control onetouchplay")
+            return True
         if self.tv_on():
             return True
         progress("Ligando a TV")
-        steps = (lambda: None,  # o KEYCODE_WAKEUP que acabou de acordar a Mi Box já costuma ligar a TV
+        d = self.display
+        steps = (lambda: None,  # o KEYCODE_WAKEUP que acabou de acordar a caixa já costuma ligar a TV
                  lambda: self.shell("cmd hdmi_control onetouchplay"),  # pede de novo, pelo HDMI
-                 lambda: self.wake_on_lan(TV_MAC, TV_IP))  # precisa de "Ligar via Wi-Fi" ativo na LG
+                 lambda: self.wake_on_lan(d.get("mac"), d["ip"]))  # precisa de "Ligar via Wi-Fi" ativo na TV
         for step in steps:
             step()
             for _ in range(10):
@@ -164,21 +202,25 @@ class MiBox:
         return False
 
     def connect(self, progress=lambda m: None):
-        """Liga a conexão do adb, acordando a Mi Box pela rede se ela estiver dormindo."""
+        """Liga a conexão do adb, acordando a TV pela rede se ela estiver dormindo. Se o IP mudou, acha de novo."""
+        if not self.tv:
+            return False
         if self.online():
             return True
         if not self._port_open():
-            progress("Acordando a Mi Box")
+            progress("Acordando a TV")
             for i in range(30):
                 if i % 4 == 0:
                     self.wake_on_lan()  # o pacote às vezes se perde no Wi-Fi: manda de novo enquanto espera
+                if i == 10:
+                    tvdevices.relocate(self.tv)  # 10 s acordando e nada: talvez o roteador tenha dado outro IP
                 time.sleep(1)
                 if self._port_open():
                     break
             else:
                 return False
         for _ in range(3):
-            # quando a Mi Box dorme, a conexão antiga fica "offline" no adb e o connect diz "já conectado";
+            # quando a TV dorme, a conexão antiga fica "offline" no adb e o connect diz "já conectado";
             # derrubar antes faz ele abrir uma conexão nova
             self.run("disconnect", self.serial, timeout=5)
             self.run("connect", self.serial, timeout=10)

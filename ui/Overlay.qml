@@ -1132,7 +1132,7 @@ Item {
         name: "tv"
         width: 330; height: (root.watchOn ? watchCol : tvCol).implicitHeight + 28
 
-        // assistindo na TV: as etapas até o app onVLC da Mi Box abrir, e depois o botão de voltar para cá
+        // assistindo na TV: as etapas até o app onVLC da TV abrir, e depois o botão de voltar para cá
         Column {
             id: watchCol
             readonly property var w: s.watch || ({})
@@ -1142,7 +1142,7 @@ Item {
             x: 14; y: 14; width: parent.width - 28
             spacing: 8
             Text {
-                text: watchCol.playing ? "Tocando na TV · Mi Box" : "Assistir na TV"
+                text: watchCol.playing ? "Tocando na TV · " + (watchCol.w.tv || "TV") : "Assistir na TV"
                 color: "white"; font.family: root.uiFont; font.pixelSize: 13; font.bold: true
             }
             // etapas da conexão, uma embaixo da outra, com ✓ nas que já passaram
@@ -1155,7 +1155,7 @@ Item {
                     width: watchCol.width; height: 20
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: ({ connect: "Conectando na Mi Box", library: "Colocando na biblioteca", wake: "Acordando a Mi Box",
+                        text: ({ connect: "Conectando na TV", library: "Colocando na biblioteca", wake: "Acordando a TV",
                                  tv: "Ligando a TV", open: "Abrindo no onVLC da TV" })[parent.modelData]
                               + (parent.modelData === "library" && parent.current && watchCol.w.p ? " " + watchCol.w.p + "%" : "")
                               + (parent.current ? "…" : "")
@@ -1222,7 +1222,7 @@ Item {
             Text { text: "Enviar para TV"; color: "white"; font.family: root.uiFont; font.pixelSize: 13; font.bold: true }
             Repeater {
                 // [ícone, título, explicação, ação]; sem ação = ainda não existe
-                model: [["tv", "Assistir na TV", "Abre no onVLC da Mi Box, deste ponto.", "watch"],
+                model: [["tv", "Assistir na TV", "Abre no onVLC da TV, deste ponto.", "watch"],
                         ["folder", "Pasta onVLC", "Deixa na biblioteca da TV para ver quando quiser.", "folder"]]
                 delegate: Rectangle {
                     id: dst

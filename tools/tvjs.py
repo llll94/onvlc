@@ -1,4 +1,4 @@
-"""Roda JavaScript na página da biblioteca aberta na Mi Box (depuração do WebView pelo adb).
+"""Roda JavaScript na página da biblioteca aberta na TV (depuração do WebView pelo adb).
 
 Uso: python tools\\tvjs.py "expressão"      → imprime o resultado
      python tools\\tvjs.py --key ArrowRight   → aperta uma tecla do "controle" na página
@@ -17,7 +17,7 @@ PORT = 9223
 
 
 def connect():
-    box = tvstream.MiBox()
+    box = tvstream.TVBox()
     box.connect()
     socks = box.shell("cat /proc/net/unix | grep -o 'webview_devtools_remote_[0-9]*' | sort -u")
     pid = box.shell("pidof com.lucas.tvcache")

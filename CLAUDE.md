@@ -51,7 +51,8 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
 | `server\*.go` | Biblioteca em Go: `names.go` (nome do arquivo, legendas, idioma), `probe.go` (ffprobe/ffmpeg), `tmdb.go` (TMDB pt-BR, nova tentativa com espera crescente, chave lida do Gerenciador de Credenciais), `library.go` (índice, varredura, regras `isEnd`/`resumeAt`, assistidos), `listing.go` (`/api/library`), `positions.go` (posições no registro, mesmo lugar do player), `thumbs.go`, `watch.go` (vigia da pasta), `http.go` (rotas), `main.go` (porta exclusiva, bandeja). `ONVLC_PORT` muda a porta (testes) |
 | `library.py` | Lado do player: `LIB_DIR`, `is_sample`, `running()`, `start_detached()` (abre o `onvlc-biblioteca.exe`) |
 | `tvfolder.py` | Painel "Pasta onVLC" do PC: lista com nome da TV e estado; "Mandar para a TV" = hardlink na pasta (mesmo disco) ou cópia; lixeira; `find_tool` (ffmpeg); `VIDEO_EXTS` |
-| `tvstream.py` | **Assistir na TV** (do PC): adb, Wake-on-LAN, liga TV por HDMI-CEC, `open_library(id, pos)` / `stop_library()` = `am start` no `LibraryActivity` com extras `play`/`pos` ou `stop` |
+| `tvstream.py` | **Assistir na TV** (do PC): `TVBox` = a TV salva em `tvs.json` (lida na hora de usar); adb (`find_adb`: o da pasta `adb\` ao lado do `.exe`, senão o do PC), Wake-on-LAN, liga a tela por HDMI-CEC (e pela rede se a TV salva tiver `display`, a LG), se o IP mudou acha de novo (`tvdevices.relocate`); `open_library(id, pos)` / `stop_library()` = `am start` no `LibraryActivity` com extras `play`/`pos` ou `stop` |
+| `tvdevices.py` | TVs ligadas ao PC: `%LOCALAPPDATA%\onVLC\tvs.json` (`load`/`default`/`save`/`remove`; id = MAC do Bluetooth, que a TV anuncia e não muda); `discover()` acha Android TVs na rede pelo mDNS (`_androidtvremote2` = aceita controle remoto, `_googlecast` = nome dado pela pessoa e modelo, `_adb` = depuração ligada) + MAC pela tabela ARP; `Remote` = controle remoto do protocolo do app Google TV (`androidtvremote2`, porta 6466): `connect` (levanta `NeedsPairing`), `start_pairing`/`finish_pairing(código)`, `key("HOME")`, `open_link(url)`, `info()` (fabricante, modelo, app na frente). Certificado do pareamento em `%LOCALAPPDATA%\onVLC\remote\` |
 | `thumbs.py` | Miniaturas no PC só quando a biblioteca está fora (normalmente é o `server\thumbs.go`, até 3 vídeos ao mesmo tempo) |
 | `opensubs.py` | Legendas do OpenSubtitles (falta o Lucas criar conta/chave) |
 | `tvui\index.html`, `app.js`, `style.css` | Página da biblioteca (1920×1080 escalada; sem filtros/máscaras/sombras animadas no CSS; capas `loading=lazy`; a cada 30 s pede `api/state` e só baixa a lista inteira quando muda; destaque não recria o logo). Tela inicial sem abas, só 3 linhas: Continuar assistindo / Mídias (tudo, mais novo primeiro) / Vocês já assistiram (montada uma vez e reaproveitada); sem favoritos. Página do filme/série, indisponível, procurando PC. Modo PC com `?pc=1` |
@@ -62,7 +63,7 @@ Um player de vídeo próprio com o motor do VLC, em três partes:
 | `PcFinder.java` | Acha o PC: último IP salvo, senão varre x.x.x.1–254 na porta 8780 (`/api/hello`, guarda o MAC); `wake()` = Wake-on-LAN |
 | `Progress.java` | POST da posição para o PC |
 | `CacheService.java` | Serviço em primeiro plano durante o filme |
-| `tools\build.py` | Compila a biblioteca em Go e gera `dist\onVLC\onVLC.exe` (PyInstaller) com o `onvlc-biblioteca.exe` ao lado; `trim()` apaga do pacote o Qt que não é usado (3D, gráficos, mapas, multimídia, PDF, WebEngine, traduções fora pt-BR, `opengl32sw`): **~111 MB**; atalhos, registro como app de vídeo |
+| `tools\build.py` | Compila a biblioteca em Go e gera `dist\onVLC\onVLC.exe` (PyInstaller) com o `onvlc-biblioteca.exe` ao lado; `trim()` apaga do pacote o Qt que não é usado (3D, gráficos, mapas, multimídia, PDF, WebEngine, traduções fora pt-BR, `opengl32sw`): **~138 MB** com o adb (pasta `adb\`, copiado do `winget install Google.PlatformTools` para ser da mesma versão) e as bibliotecas da TV (`zeroconf`, `androidtvremote2`); atalhos, registro como app de vídeo |
 | `tools\build_tvcache.py` | APK sem Gradle (javac → d8 → aapt2 → zipalign -p → apksigner), baixa o AAR do libVLC uma vez em `build\libvlc` (SHA-256 conferido), só `armeabi-v7a`, `.so` sem compressão + `extractNativeLibs=false` (APK 40,6 MB, nada extraído ao instalar), chave em `%LOCALAPPDATA%\onVLC`; instala na Mi Box (`--no-install` para só gerar; com a Mi Box dormindo, mandar WOL em loop durante o `adb install`) |
 | `tools\tvjs.py` | Roda JS na página aberta na TV pelo adb (depuração do WebView): `python tools\tvjs.py "expressão"` |
 | `tools\make_icon.py`, `set_tmdb_key.py` | Ícone; guardar chave do TMDB |
@@ -89,7 +90,11 @@ cada vídeo tem `id, path, file, size, dur, pos, bps, quality, audio, subs, extS
 
 - PC 192.168.1.69 (cabo; MAC `AA-BB-CC-00-00-04`, Realtek 2.5GbE; suspensão S3 acorda pela rede). Mi Box `192.168.1.31` (MiTV-AFMU0, Android 14, armeabi-v7a, MAC `AA-BB-CC-00-00-01`),
   adb `192.168.1.31:5555` autorizado. TV LG C1 4K `192.168.1.13` (porta 3000 só com ela ligada). Mi Box desenha em 1920×1080.
-- `tvstream.MiBox().connect()` acorda pela rede (WOL repetido); `KEYCODE_WAKEUP` liga a TV via HDMI-CEC mas **traz a tela
+- **A Mi Box está salva em `tvs.json`** como "Sala" (Xiaomi MiTV-AFMU0, MAC Bluetooth `AA-BB-CC-00-00-02`), com a
+  LG em `display`; o PC já está pareado como controle remoto dela ("onVLC no LUCAS-PC"). Nada de IP fixo no código.
+- **Antes de testar, ver se ela já está acordada** (porta 5555 aberta ou app na frente): se estiver, não mexer; só mandar
+  dormir no fim se estava dormindo (em 01/11 um teste mandou dormir com o YouTube na frente).
+- `tvstream.TVBox().connect()` acorda pela rede (WOL repetido); `KEYCODE_WAKEUP` liga a TV via HDMI-CEC mas **traz a tela
   inicial do Google TV para frente** (o app fica congelado em segundo plano). Para abrir o app use só `am start -n com.lucas.tvcache/.LibraryActivity`.
 - **Low Power Standby desligado** (`settings put global low_power_standby_enabled 0`): antes cortava o Wi-Fi 5 s depois
   de dormir e o WOL falhava. Testado: acorda em ~4 s com a TV desligada. Para instalar APK com ela dormindo, mandar WOL

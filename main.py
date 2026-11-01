@@ -138,7 +138,7 @@ class Player(QObject):
         self._tvState.connect(self._on_tv)
         self.tv.refresh_async()
 
-        self.box = tvstream.MiBox()
+        self.box = tvstream.TVBox()
         self.watching = False
         self.st["watch"] = {}
         self._watchState.connect(self._on_watch)
@@ -702,6 +702,7 @@ class Player(QObject):
 
     # ---------- Assistir na TV ----------
     def _on_watch(self, data):
+        data["tv"] = self.box.name
         msg = data.pop("toast", None)
         resume = data.pop("resume", None)
         self.st["watch"] = data
@@ -745,7 +746,7 @@ class Player(QObject):
 
     @Slot()
     def tvWatch(self):
-        """Assistir na TV: põe o vídeo na biblioteca (se ainda não está), liga Mi Box e TV e pede para o
+        """Assistir na TV: põe o vídeo na biblioteca (se ainda não está), liga a caixa e a TV e pede para o
         app onVLC de lá tocar a partir daqui. Depois disso a TV cuida de tudo e manda a posição para a biblioteca."""
         if not self.path or self.watching:
             return
@@ -765,6 +766,8 @@ class Player(QObject):
 
         def work():
             try:
+                if not self.box.tv:
+                    raise RuntimeError("Nenhuma TV ligada a este PC ainda. Configure em Configurações → TV.")
                 # 1. o vídeo precisa estar na biblioteca (pasta onVLC): de fora, vai por link ou cópia
                 vid = self._library_id(path)
                 if not vid:
@@ -784,9 +787,9 @@ class Player(QObject):
                         vid = self._library_id(path)
                     if not alive():
                         return
-                # 2. Mi Box e TV
+                # 2. caixa e TV
                 if not self.box.connect(lambda m: self._watchState.emit({"stage": "wake", "title": title})):
-                    raise RuntimeError("A Mi Box não respondeu. Ela está ligada na tomada?")
+                    raise RuntimeError(f"A TV ({self.box.name}) não respondeu. Ela está ligada na tomada?")
                 self.box.wake_screen()
                 if not self.box.ensure_tv(lambda m: self._watchState.emit({"stage": "tv", "title": title})):
                     log.warning("a TV não ligou; mandando mesmo assim")

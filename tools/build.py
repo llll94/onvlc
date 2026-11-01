@@ -173,6 +173,20 @@ def start_with_windows(lib_exe):
         print("biblioteca abre com o Windows (a tarefa não pôde ser criada:", (r.stderr or r.stdout).strip(), ")")
 
 
+def copy_adb(dest):
+    """O adb (instalar e abrir o app na TV) vai dentro do onVLC: quem instala não precisa ter nada. Copiado do
+    instalado neste PC (winget install Google.PlatformTools), para os dois serem da mesma versão e não brigarem."""
+    sys.path.insert(0, str(ROOT))
+    import tvstream
+    src = Path(tvstream.find_adb())
+    if not src.is_file():
+        sys.exit("adb não encontrado: winget install Google.PlatformTools")
+    dest.mkdir(exist_ok=True)
+    for name in ("adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll"):
+        shutil.copy2(src.with_name(name), dest / name)
+    print("adb:", dest)
+
+
 def stop_running():
     """Antes de trocar os arquivos de dist\\onVLC: pausa a tarefa (senão ela reabre a biblioteca no meio do build e o
     Windows não deixa apagar a pasta) e fecha a biblioteca e o player (autorizado pelo Lucas)."""
@@ -194,12 +208,14 @@ def main():
         "--add-data", f"{ROOT / 'tvui'}{os.pathsep}tvui",
         "--exclude-module", "PySide6.QtWebEngineCore", "--exclude-module", "PySide6.QtWebEngineQuick",
         "--exclude-module", "setuptools",
+        "--collect-submodules", "androidtvremote2", "--collect-submodules", "zeroconf",  # TV: achar e parear
         "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build"), "--specpath", str(ROOT / "build"),
     ], check=True)
 
     exe = ROOT / "dist" / NAME / f"{NAME}.exe"
     trim(exe.parent / "_internal")
     shutil.copy2(lib_exe, exe.with_name(lib_exe.name))
+    copy_adb(exe.parent / "adb")
     # ícone dos atalhos fora de dist\ (que o build apaga): se o Windows olhar o atalho no meio do build, não guarda
     # um ícone em branco no cache
     ico = Path(os.environ["LOCALAPPDATA"]) / "onVLC" / f"{NAME}.ico"

@@ -1,2 +1,5 @@
 PySide6>=6.8
 python-vlc>=3.0.20
+keyring>=25
+zeroconf>=0.130
+androidtvremote2>=0.3

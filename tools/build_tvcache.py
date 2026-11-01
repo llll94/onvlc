@@ -18,7 +18,6 @@ SRC = ROOT / "android"
 OUT = ROOT / "build" / "tvcache"
 SDK = Path(os.environ.get("ANDROID_HOME") or Path(os.environ["LOCALAPPDATA"]) / "Android" / "Sdk")
 PLATFORM, BUILD_TOOLS = "android-34", "34.0.0"
-BOX = "192.168.1.31:5555"
 # o motor do VLC (só o player, sem o app): baixado uma vez do repositório oficial da VideoLAN
 LIBVLC_VERSION = "3.7.7"
 LIBVLC_AAR = f"https://repo1.maven.org/maven2/org/videolan/android/libvlc-all/{LIBVLC_VERSION}/libvlc-all-{LIBVLC_VERSION}.aar"
@@ -139,9 +138,9 @@ def main():
     if "--no-install" not in sys.argv:
         sys.path.insert(0, str(ROOT))
         import tvstream
-        box = tvstream.MiBox()
-        if not box.connect(print):  # acorda a Mi Box pela rede se ela estiver dormindo
-            sys.exit("A Mi Box não respondeu; o APK ficou em " + str(apk))
+        box = tvstream.TVBox()  # a TV salva em tvs.json
+        if not box.connect(print):  # acorda a TV pela rede se ela estiver dormindo
+            sys.exit(f"A TV ({box.name}) não respondeu; o APK ficou em " + str(apk))
         run(box.adb, "-s", box.serial, "install", "-r", apk)
 
 
