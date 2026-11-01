@@ -177,7 +177,9 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
                 web.setVisibility(View.INVISIBLE);
                 getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                 player.open("selftest", base0 + "/api/selftest", 0, new String[0]);
-                ui.postDelayed(this::finishSelfTest, 30_000);  // segurança: o vídeo não andou
+                // segurança: o vídeo não andou. Folgado: na 1ª vez depois de instalar, o motor monta a lista de fontes
+                // do sistema antes de mostrar o primeiro quadro (35 s na Mi Box)
+                ui.postDelayed(this::finishSelfTest, 120_000);
             });
         }, "selftest").start();
     }

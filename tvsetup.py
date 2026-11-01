@@ -469,7 +469,8 @@ class Setup(QObject):
             t0 = time.time()
             box.shell(f"am start -n {tvstream.APP_ACTIVITY} --ez selftest true --es pc http://{pc_ip}:{library.PORT}")
             res = None
-            while alive() and time.time() - t0 < 60:
+            video_at = None
+            while alive() and time.time() - t0 < 180:
                 try:
                     r = lib_json("/api/selftest/result")
                     if r.get("at", 0) >= t0 - 1:
@@ -479,6 +480,9 @@ class Setup(QObject):
                                 f"{sp:.0f} Mb/s · " + ("dá para 4K com folga" if sp >= 80 else "dá para 4K" if sp >= 40
                                                        else "bom para 1080p; 4K pode travar" if sp >= 15 else "pode travar"))
                             row(2, "now")
+                            video_at = time.time()
+                        if video_at and time.time() - video_at > 8 and not rows[2]["v"]:
+                            row(2, "now", "na primeira vez a TV prepara o player: pode levar até 1 minuto")
                         if r.get("done"):
                             res = r
                             break
@@ -492,9 +496,14 @@ class Setup(QObject):
                     if rows[i]["s"] in ("wait", "now"):
                         row(i, "warn", "o app da TV não respondeu ao teste")
             else:
-                stalls = res.get("stalls", 0)
-                row(2, "ok" if res.get("played", 0) >= 8 and not stalls else "warn",
-                    "tocou 10 s sem travar" if not stalls else f"travou {stalls} vez(es)")
+                stalls, played = res.get("stalls", 0), res.get("played", 0)
+                if played < 1:
+                    row(2, "bad", "o vídeo não começou na TV")
+                elif played < 8:
+                    row(2, "warn", f"tocou só {played:.0f} s")
+                else:
+                    row(2, "ok" if not stalls else "warn",
+                        "tocou 10 s sem travar" if not stalls else f"tocou, mas travou {stalls} vez(es)")
                 yes = lambda k: "✓" if res.get(k) else "✗"  # noqa: E731
                 row(3, "ok", f"4K {yes('uhd')} · HDR10 {yes('hdr10')} · Dolby Vision {yes('dv')}")
                 ch = res.get("channels", 2)

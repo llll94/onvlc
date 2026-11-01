@@ -146,13 +146,13 @@ Item {
         property string value: ""
         default property alias extra: more.data
         width: parent ? parent.width : 400
-        height: col.implicitHeight + 20
+        height: col.implicitHeight + 16
         radius: 10
         color: s === "now" ? wiz.panel2 : "transparent"
         border.color: s === "now" ? wiz.line : "transparent"
         opacity: s === "wait" ? 0.45 : 1
         Rectangle {
-            x: 12; y: 11; width: 22; height: 22; radius: 11
+            x: 12; y: 9; width: 22; height: 22; radius: 11
             color: tk.s === "ok" ? wiz.green : tk.s === "warn" ? wiz.warn : tk.s === "bad" ? wiz.bad : "transparent"
             border.width: 2
             border.color: tk.s === "now" ? wiz.orange : tk.s === "wait" ? wiz.line : color
@@ -164,8 +164,8 @@ Item {
         }
         Column {
             id: col
-            x: 46; y: 10; width: parent.width - 58
-            spacing: 4
+            x: 46; y: 8; width: parent.width - 58
+            spacing: 2
             Row {
                 spacing: 8
                 Text { text: tk.title; color: wiz.fg; font.family: wiz.font; font.pixelSize: 15; font.weight: Font.DemiBold }
@@ -173,7 +173,7 @@ Item {
             }
             Txt { visible: !!tk.value; width: parent.width; text: tk.value; font.family: wiz.mono; font.pixelSize: 13 }
             Txt { visible: !!tk.body; width: parent.width; text: tk.body; font.pixelSize: 14 }
-            Column { id: more; width: parent.width; spacing: 8; topPadding: children.length ? 4 : 0 }
+            Column { id: more; width: parent.width; spacing: 8; topPadding: visibleChildren.length ? 6 : 0 }
         }
     }
     component Bar: Rectangle {
@@ -421,11 +421,14 @@ Item {
                 id: tst
                 visible: wiz.step === 5; width: parent.width; spacing: 14
                 readonly property var t: st.test || ({})
+                // terminou: rola até o fim, onde estão a pergunta e o "Testar de novo"
+                readonly property bool done: t.phase === "done"
+                onDoneChanged: if (done) Qt.callLater(function () { flick.contentY = Math.max(0, flick.contentHeight - flick.height) })
                 Title { width: parent.width; text: "Teste rápido" }
                 Txt { width: parent.width; text: "Vou mandar um vídeo de 10 segundos para a TV, com cores, movimento e som. A TV me conta o que conseguiu tocar." }
                 Button { visible: !tst.t.phase; primary: true; label: "Começar o teste"; onClicked: setup.runTest() }
                 Column {
-                    visible: !!tst.t.phase; width: parent.width; spacing: 6
+                    visible: !!tst.t.phase; width: parent.width; spacing: 2
                     Repeater {
                         model: tst.t.rows || []
                         delegate: Task {
@@ -437,7 +440,7 @@ Item {
                     }
                 }
                 Row {
-                    visible: tst.t.phase === "done" && tst.t.seen === null; spacing: 10
+                    visible: tst.t.phase === "done" && tst.t.seen !== true && tst.t.seen !== false; spacing: 10  // ainda não respondeu (o Python manda None = undefined)
                     Text { anchors.verticalCenter: parent.verticalCenter; text: "Você viu e ouviu o vídeo na TV?"; color: wiz.fg; font.family: wiz.font; font.pixelSize: 15; font.weight: Font.DemiBold }
                     Button { label: "Sim"; onClicked: setup.seen(true) }
                     Button { label: "Não"; onClicked: setup.seen(false) }
@@ -446,7 +449,8 @@ Item {
                     visible: tst.t.seen === false; kind: "help"
                     text: "Confira se a TV não está no mudo e se está na entrada certa (o HDMI onde a caixa da TV está ligada). Se a imagem apareceu sem som, o problema costuma ser o volume da TV."
                 }
-                Button { visible: tst.t.seen === false; label: "Testar de novo"; onClicked: setup.runTest() }
+                // terminou (com ou sem problema): dá para repetir na hora, sem precisar voltar
+                Button { visible: tst.t.phase === "done"; label: "Testar de novo"; onClicked: setup.runTest() }
             }
 
             // 6. capas
@@ -570,7 +574,7 @@ Item {
             anchors.right: parent.right
             spacing: 10
             Button { visible: wiz.step === 0; link: true; label: "Agora não"; onClicked: { setup.dismiss(); wiz.close() } }
-            Button { visible: wiz.step === 5; link: true; label: "Pular o teste"; onClicked: setup.go(6) }
+            Button { visible: wiz.step === 5 && !(st.test && st.test.phase === "done"); link: true; label: "Pular o teste"; onClicked: setup.go(6) }
             Button { visible: wiz.step === 8; link: true; label: "Abrir a pasta"; onClicked: setup.openFolder() }
             Button {
                 visible: wiz.step !== 1  // na lista de TVs, escolher a TV já é o próximo passo
@@ -581,7 +585,7 @@ Item {
                 enabled: wiz.step === 2 ? codeField.text.length === 6 && !(st.code && st.code.checking)
                        : wiz.step === 3 ? !!(st.install && st.install.phase === "done")
                        : wiz.step === 4 ? !!(st.conn && st.conn.phase === "ok")
-                       : wiz.step === 5 ? !!(st.test && st.test.seen === true)
+                       : wiz.step === 5 ? !!(st.test && st.test.phase === "done")  // o teste informa; não prende ninguém
                        : true
                 onClicked: {
                     if (wiz.step === 2) setup.sendCode(codeField.text)
