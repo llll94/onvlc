@@ -200,12 +200,18 @@ def main():
     exe = ROOT / "dist" / NAME / f"{NAME}.exe"
     trim(exe.parent / "_internal")
     shutil.copy2(lib_exe, exe.with_name(lib_exe.name))
+    # ícone dos atalhos fora de dist\ (que o build apaga): se o Windows olhar o atalho no meio do build, não guarda
+    # um ícone em branco no cache
+    ico = Path(os.environ["LOCALAPPDATA"]) / "onVLC" / f"{NAME}.ico"
+    ico.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "ui" / "icon.ico", ico)
     for folder in (DESKTOP, START_MENU):
         lnk = folder / f"{NAME}.lnk"
         ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}');"
-              f"$s.TargetPath='{exe}';$s.WorkingDirectory='{exe.parent}';$s.IconLocation='{exe},0';$s.Save()")
+              f"$s.TargetPath='{exe}';$s.WorkingDirectory='{exe.parent}';$s.IconLocation='{ico},0';$s.Save()")
         subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True)
         print("atalho:", lnk)
+    subprocess.run(["ie4uinit.exe", "-show"], capture_output=True)  # Windows relê os ícones
     register_app(exe)
     start_with_windows(exe.with_name(lib_exe.name))  # recria a tarefa (ligada)
     subprocess.run(["schtasks", "/Run", "/TN", TASK], capture_output=True)  # e a biblioteca volta na hora
