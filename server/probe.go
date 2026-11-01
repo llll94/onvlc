@@ -73,7 +73,7 @@ func probe(path string) *probeInfo {
 	defer cancel()
 	out, err := command(ctx, false, exe, "-v", "error", "-show_entries",
 		"format=duration:stream=codec_type,height,width,channels,color_transfer:stream_tags=language",
-		"-of", "json", path).Output()
+		"-of", "json", "-i", path).Output()
 	if err != nil && len(out) == 0 {
 		return nil
 	}

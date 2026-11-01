@@ -35,6 +35,9 @@ import (
 //	POST /api/progress {id,pos,dur} onde parou (nos créditos vira "assistido")
 //	POST /api/watched  {id|path}    o player do PC chegou ao fim
 //	(e as do assistente "Configurar a TV", em setup.go)
+//
+// Quem pode chamar (auth.go): tudo exige o cabeçalho X-onVLC-Key, menos /api/hello, /tv/* e /img/*. As rotas
+// "só do próprio PC" exigem a chave e vir de 127.0.0.1. Host e origem são conferidos em todo pedido.
 type server struct {
 	lib *Library
 	ui  string
@@ -56,33 +59,51 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(500)
 		}
 	}()
-	noteClient(r)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if !privateSource(r) || !hostOK(r) {
+		w.WriteHeader(403)
+		return
+	}
 	p := r.URL.Path
-	if strings.HasPrefix(p, "/tv/api/") || strings.HasPrefix(p, "/tv/img/") {
+	if strings.HasPrefix(p, "/tv/api/") || strings.HasPrefix(p, "/tv/img/") || strings.HasPrefix(p, "/tv/sub/") {
 		p = p[3:]
 	}
-	switch r.Method {
-	case "OPTIONS":
+	if r.Method == "OPTIONS" {
 		w.WriteHeader(204)
 		return
-	case "POST":
+	}
+	if r.Method != "GET" && r.Method != "HEAD" && r.Method != "POST" {
+		w.WriteHeader(405)
+		return
+	}
+	open := p == "/api/hello" || strings.HasPrefix(p, "/tv/") || p == "/" || p == "/tv" || strings.HasPrefix(p, "/img/")
+	if !open && !hasKey(r) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(401)
+		w.Write([]byte(`{"error":"sem chave: configure a TV pelo onVLC do PC"}`))
+		return
+	}
+	if !open {
+		noteClient(r)
+	}
+	if r.Method == "POST" {
 		s.post(w, r, p)
 		return
-	case "GET", "HEAD":
-		if s.setupGet(w, r, p) {
-			return
-		}
-	default:
-		w.WriteHeader(405)
+	}
+	if s.setupGet(w, r, p) {
 		return
 	}
 	switch p {
 	case "/api/hello":
 		host, _ := os.Hostname()
-		s.json(w, r, map[string]any{"app": "onvlc-library", "name": host, "version": 2, "mac": macOf(r)}, false)
+		out := map[string]any{"app": "onvlc-library", "name": host, "version": 3, "mac": macOf(r)}
+		if nonce := r.URL.Query().Get("nonce"); nonce != "" && len(nonce) <= 128 {
+			out["auth"] = hmacHex("hello:" + nonce) // a TV confere: só o PC de verdade sabe o segredo
+		}
+		s.json(w, r, out, false)
 		return
 	case "/api/library":
-		s.json(w, r, s.lib.listing(), true)
+		s.json(w, r, s.lib.listing(local(r)), true)
 		return
 	case "/api/state":
 		s.json(w, r, s.lib.state(), true)
@@ -92,15 +113,25 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(403)
 			return
 		}
-		s.json(w, r, s.lib.media(r.URL.Query().Get("path")), false)
+		path, err := localPath(r.URL.Query().Get("path"))
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		s.json(w, r, s.lib.media(path), false)
 		return
 	case "/api/thumbs":
 		if !local(r) {
 			w.WriteHeader(403)
 			return
 		}
+		path, err := localPath(r.URL.Query().Get("path"))
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
 		dur, _ := strconv.ParseFloat(r.URL.Query().Get("dur"), 64)
-		s.json(w, r, s.lib.pathThumbs(r.URL.Query().Get("path"), dur), false)
+		s.json(w, r, s.lib.pathThumbs(path, dur), false)
 		return
 	case "/", "/tv", "/tv/":
 		p = "/tv/index.html"
@@ -109,9 +140,14 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rec := s.lib.byID(m[1])
 		n, _ := strconv.Atoi(m[2])
 		if rec != nil && n < len(rec.ExtSubs) {
-			if data, err := os.ReadFile(rec.ExtSubs[n].Path); err == nil {
-				s.bytes(w, r, data, "text/plain; charset=utf-8", "no-cache")
-				return
+			// só arquivo comum e pequeno: um atalho (symlink) com nome .srt apontando para outro arquivo, ou um
+			// "legenda" de gigabytes, não é servido
+			sp := rec.ExtSubs[n].Path
+			if st, err := os.Lstat(sp); err == nil && st.Mode().IsRegular() && st.Size() <= maxSubSize {
+				if data, err := os.ReadFile(sp); err == nil {
+					s.bytes(w, r, data, "text/plain; charset=utf-8", "no-cache")
+					return
+				}
 			}
 		}
 		http.NotFound(w, r)
@@ -238,8 +274,10 @@ func local(r *http.Request) bool {
 	if i := strings.LastIndex(host, ":"); i >= 0 {
 		host = host[:i]
 	}
-	return host == "127.0.0.1" || host == "[::1]"
+	return host == "127.0.0.1"
 }
+
+const maxSubSize = 10 << 20
 
 // json responde com ETag (sem mudança: 304) e gzip quando o outro lado aceita.
 func (s *server) json(w http.ResponseWriter, r *http.Request, v any, etag bool) {
@@ -302,18 +340,25 @@ func (s *server) file(w http.ResponseWriter, r *http.Request, path, cache string
 		w.WriteHeader(304)
 		return
 	}
+	if !compressible[ext] { // imagens e vídeo: direto do disco, com Range, sem carregar o arquivo na memória
+		f, err := os.Open(path)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		w.Header().Set("Content-Type", ctype)
+		w.Header().Set("Cache-Control", cache)
+		http.ServeContent(w, r, "", st.ModTime(), f)
+		return
+	}
+	if st.Size() > 4<<20 {
+		http.Error(w, "arquivo grande demais", 500)
+		return
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		http.NotFound(w, r)
-		return
-	}
-	if !compressible[ext] {
-		w.Header().Set("Content-Type", ctype)
-		w.Header().Set("Cache-Control", cache)
-		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-		if r.Method != "HEAD" {
-			w.Write(data)
-		}
 		return
 	}
 	s.bytes(w, r, data, ctype, cache)
@@ -322,7 +367,7 @@ func (s *server) file(w http.ResponseWriter, r *http.Request, path, cache string
 // ---------- estado pequeno e arquivos do PC ----------
 
 func (l *Library) state() map[string]any {
-	out := l.listing()
+	out := l.listing(false)
 	pos := map[string]float64{}
 	for _, m := range out.Movies {
 		if m.Pos > 0 {
@@ -356,7 +401,7 @@ func (l *Library) pathThumbs(path string, dur float64) map[string]any {
 			dur = rec.Dur
 		}
 	} else {
-		id = md5hex(strings.ToLower(path))[:16]
+		id = hmacHex("thumb:" + strings.ToLower(path))[:16] // só quem pediu sabe o nome; outro aparelho não adivinha
 		hdrMu.Lock()
 		h, ok := hdrOf[path]
 		hdrMu.Unlock()

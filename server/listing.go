@@ -15,7 +15,7 @@ import (
 type video struct {
 	ID      string           `json:"id"`
 	File    string           `json:"file"`
-	Path    string           `json:"path"`
+	Path    string           `json:"path,omitempty"`
 	Size    int64            `json:"size"`
 	Dur     float64          `json:"dur"`
 	Pos     float64          `json:"pos"`
@@ -75,7 +75,7 @@ type showOut struct {
 
 type listingOut struct {
 	PC       string           `json:"pc"`
-	Folder   string           `json:"folder"`
+	Folder   string           `json:"folder,omitempty"`
 	Busy     int              `json:"busy"`
 	Version  int64            `json:"version"`
 	History  []map[string]any `json:"history"`
@@ -92,20 +92,25 @@ func nonNil(s []string) []string {
 	return s
 }
 
-func common(r *record, pos float64) video {
+func common(r *record, withPaths bool, pos float64) video {
 	ext := make([]map[string]any, len(r.ExtSubs))
 	for i, x := range r.ExtSubs {
 		ext[i] = map[string]any{"n": i, "name": x.Name}
 	}
-	v := video{ID: r.ID, File: r.File, Path: r.Path, Size: r.Size, Dur: r.Dur, Pos: pos, ExtSubs: ext, Quality: r.Quality,
+	v := video{ID: r.ID, File: r.File, Size: r.Size, Dur: r.Dur, Pos: pos, ExtSubs: ext, Quality: r.Quality,
 		Audio: nonNil(r.Audio), Subs: nonNil(r.Subs), Broken: r.Broken, Added: r.Added}
 	if r.Dur > 0 {
 		v.Bps = int64(float64(r.Size) * 8 / r.Dur)
 	}
+	if withPaths {
+		v.Path = r.Path
+	}
 	return v
 }
 
-func (l *Library) listing() *listingOut {
+// listing monta a lista. withPaths: só para o player do PC (a TV e outros aparelhos não recebem os caminhos
+// completos do Windows, que trazem o nome do usuário).
+func (l *Library) listing(withPaths bool) *listingOut {
 	host, _ := os.Hostname()
 	l.mu.Lock()
 	recs := make([]record, 0, len(l.files))
@@ -116,8 +121,11 @@ func (l *Library) listing() *listingOut {
 	for k, s := range l.shows {
 		shows[k] = *s
 	}
-	out := &listingOut{PC: host, Folder: libDir, Busy: l.busy, Version: l.version, Tmdb: l.tmdb.token != "",
+	out := &listingOut{PC: host, Busy: l.busy, Version: l.version, Tmdb: l.tmdb.hasToken(),
 		Movies: []*movieOut{}, Shows: []*showOut{}, Continue: []string{}}
+	if withPaths {
+		out.Folder = libDir
+	}
 	l.mu.Unlock()
 
 	type prog struct {
@@ -134,7 +142,7 @@ func (l *Library) listing() *listingOut {
 		}
 	}
 
-	hist := readHistory()
+	hist := history()
 	sort.SliceStable(hist, func(i, j int) bool { return num(hist[i]["at"]) > num(hist[j]["at"]) })
 	last := map[string]string{}
 	for _, h := range hist {
@@ -155,7 +163,7 @@ func (l *Library) listing() *listingOut {
 	seasons := map[string]map[int]*seasonOut{}
 	for i := range recs {
 		r := &recs[i]
-		v := common(r, posOf[r.ID])
+		v := common(r, withPaths, posOf[r.ID])
 		v.Watched = last[r.ID]
 		if r.Kind == "movie" {
 			m := r.Meta

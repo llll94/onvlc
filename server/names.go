@@ -126,7 +126,8 @@ func findSubs(video string) []extSub {
 		}
 		names := make([]string, 0, len(list))
 		for _, e := range list {
-			if !e.IsDir() && subExts[strings.ToLower(filepath.Ext(e.Name()))] {
+			// só arquivo comum: atalhos (symlinks) com nome de legenda não entram
+			if e.Type().IsRegular() && subExts[strings.ToLower(filepath.Ext(e.Name()))] {
 				names = append(names, e.Name())
 			}
 		}

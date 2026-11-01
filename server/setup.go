@@ -120,17 +120,45 @@ func (s *server) setupGet(w http.ResponseWriter, r *http.Request, p string) bool
 func (s *server) setupPost(w http.ResponseWriter, r *http.Request, p string) bool {
 	switch p {
 	case "/api/selftest/result":
-		var body map[string]any
-		if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body); err != nil {
+		// só os campos conhecidos, com tamanho limitado: o que vier a mais não entra no log nem no resultado
+		var in struct {
+			Speed    *float64 `json:"speed"`
+			Played   float64  `json:"played"`
+			Stalls   int      `json:"stalls"`
+			Done     bool     `json:"done"`
+			UHD      bool     `json:"uhd"`
+			HDR10    bool     `json:"hdr10"`
+			DV       bool     `json:"dv"`
+			HLG      bool     `json:"hlg"`
+			Channels int      `json:"channels"`
+			Model    string   `json:"model"`
+			Android  string   `json:"android"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&in); err != nil {
 			w.WriteHeader(400)
 			return true
 		}
-		body["at"] = time.Now().Unix()
-		body["from"] = hostOf(r)
+		clip := func(s string) string {
+			if len(s) > 64 {
+				s = s[:64]
+			}
+			return strings.Map(func(c rune) rune {
+				if c < 32 || c == 127 {
+					return -1
+				}
+				return c
+			}, s)
+		}
+		body := map[string]any{"at": time.Now().Unix(), "from": hostOf(r), "played": in.Played, "stalls": in.Stalls,
+			"done": in.Done, "uhd": in.UHD, "hdr10": in.HDR10, "dv": in.DV, "hlg": in.HLG, "channels": in.Channels,
+			"model": clip(in.Model), "android": clip(in.Android)}
+		if in.Speed != nil {
+			body["speed"] = *in.Speed
+		}
 		testMu.Lock()
 		testResult = body
 		testMu.Unlock()
-		log.Printf("teste da TV (%s): %v", hostOf(r), body)
+		log.Printf("teste da TV (%s): %.1f s tocados, %d travadas, pronto=%v", hostOf(r), in.Played, in.Stalls, in.Done)
 	case "/api/reload-keys":
 		if !local(r) {
 			w.WriteHeader(403)
@@ -138,8 +166,8 @@ func (s *server) setupPost(w http.ResponseWriter, r *http.Request, p string) boo
 		}
 		token := readCredential("tmdb_token", "onVLC")
 		s.lib.mu.Lock()
-		changed := token != s.lib.tmdb.token
-		s.lib.tmdb.token = token
+		changed := token != s.lib.tmdb.getToken()
+		s.lib.tmdb.setToken(token)
 		for id := range s.lib.retry { // chave nova: tudo pode tentar de novo já
 			delete(s.lib.retry, id)
 		}

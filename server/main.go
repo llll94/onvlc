@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"fyne.io/systray"
+	"golang.org/x/net/netutil"
 	"golang.org/x/sys/windows"
 )
 
@@ -32,10 +33,14 @@ func main() {
 		log.Printf("biblioteca já está rodando; saindo (%v)", err)
 		return
 	}
+	if secret() == "" {
+		log.Printf("sem segredo gravado: a TV e o player não vão conseguir falar com a biblioteca")
+	}
 	lib := newLibrary()
 	srv := &http.Server{Handler: &server{lib: lib, ui: uiDir()}, ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout: 2 * time.Minute, ErrorLog: log.New(discard{}, "", 0)}
-	go srv.Serve(ln)
+		ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 16 << 10,
+		ErrorLog: log.New(discard{}, "", 0)}
+	go srv.Serve(netutil.LimitListener(ln, 64)) // conexões ao mesmo tempo: TV + PC usam poucas; evita esgotar memória
 	log.Printf("biblioteca na porta %s, pasta %s, página %s", port, libDir, uiDir())
 	go lib.watch()
 	systray.Run(func() { tray(lib) }, func() {
@@ -168,16 +173,13 @@ func plural(n int, one, many string) string {
 
 // setupLog: biblioteca.log, até 1 MB (o anterior fica em biblioteca.log.1).
 func setupLog() {
-	if st, err := os.Stat(logF); err == nil && st.Size() > 1<<20 {
-		os.Rename(logF, logF+".1")
-	}
-	f, err := os.OpenFile(logF, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	rl, err := openRotatingLog(logF, 1<<20)
 	if err != nil {
 		return
 	}
-	log.SetOutput(f)
+	log.SetOutput(rl)
 	// se a biblioteca cair por um erro grave, o motivo fica no registro (sem janela, não há outro lugar para ver)
-	debug.SetCrashOutput(f, debug.CrashOptions{})
+	debug.SetCrashOutput(rl.f, debug.CrashOptions{})
 	log.SetFlags(log.Ldate | log.Ltime)
 	log.SetPrefix("biblioteca ")
 }

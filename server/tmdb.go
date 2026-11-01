@@ -12,8 +12,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf16"
@@ -41,14 +43,26 @@ type episodeMeta struct {
 }
 
 type tmdbClient struct {
-	token string
+	token atomic.Value // string
 	http  *http.Client
 }
+
+var imgNameRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 var errNotFound = errors.New("não encontrado")
 
 func newTmdb() *tmdbClient {
-	return &tmdbClient{token: readCredential("tmdb_token", "onVLC"), http: &http.Client{Timeout: 30 * time.Second}}
+	t := &tmdbClient{http: &http.Client{Timeout: 30 * time.Second}}
+	t.setToken(readCredential("tmdb_token", "onVLC"))
+	return t
+}
+
+// o token muda em execução (o assistente guarda um novo): leitura e escrita atômicas
+func (t *tmdbClient) getToken() string  { return t.token.Load().(string) }
+func (t *tmdbClient) setToken(s string) { t.token.Store(s) }
+
+func (t *tmdbClient) hasToken() bool {
+	return t.getToken() != ""
 }
 
 // readCredential: o mesmo lugar onde o keyring do Python guarda (Gerenciador de Credenciais do Windows):
@@ -93,14 +107,14 @@ func readCredential(user, service string) string {
 
 func (t *tmdbClient) get(p string, q url.Values, out any) error {
 	req, _ := http.NewRequest("GET", tmdbAPI+p+"?"+q.Encode(), nil)
-	req.Header.Set("Authorization", "Bearer "+t.token)
+	req.Header.Set("Authorization", "Bearer "+t.getToken())
 	req.Header.Set("Accept", "application/json")
 	for attempt := 0; attempt < 3; attempt++ {
 		res, err := t.http.Do(req)
 		if err != nil {
 			return err
 		}
-		body, _ := io.ReadAll(res.Body)
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 4<<20))
 		res.Body.Close()
 		switch {
 		case res.StatusCode == 429: // limite de pedidos: espera um pouco
@@ -122,6 +136,10 @@ func (t *tmdbClient) image(p, size string) string {
 		return ""
 	}
 	name := size + "_" + path.Base(p)
+	if !imgNameRe.MatchString(name) { // o nome vai virar arquivo em img\: só letras, números, _ . -
+		log.Printf("imagem com nome estranho ignorada: %q", name)
+		return ""
+	}
 	dst := filepath.Join(imgDir, name)
 	if _, err := os.Stat(dst); err == nil {
 		return name
@@ -136,7 +154,7 @@ func (t *tmdbClient) image(p, size string) string {
 		log.Printf("imagem %s: TMDB respondeu %d", name, res.StatusCode)
 		return ""
 	}
-	data, err := io.ReadAll(res.Body)
+	data, err := io.ReadAll(io.LimitReader(res.Body, 20<<20))
 	if err != nil {
 		return ""
 	}

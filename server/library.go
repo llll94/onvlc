@@ -77,13 +77,16 @@ func newLibrary() *Library {
 			Files map[string]*record `json:"files"`
 			Shows map[string]*show   `json:"shows"`
 		}
-		if json.Unmarshal(raw, &data) == nil {
+		if err := json.Unmarshal(raw, &data); err == nil {
 			if data.Files != nil {
 				l.files = data.Files
 			}
 			if data.Shows != nil {
 				l.shows = data.Shows
 			}
+		} else { // índice corrompido: guarda em vez de sobrescrever no próximo save
+			os.Rename(indexF, indexF+".bad")
+			log.Printf("índice ilegível, guardado como index.json.bad: %v", err)
 		}
 	}
 	for _, r := range l.files {
@@ -115,7 +118,18 @@ func (l *Library) changed() {
 
 func writeAtomic(path string, data []byte) error {
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err = f.Write(data); err == nil {
+		err = f.Sync() // no disco antes de trocar: uma queda de energia não deixa o arquivo vazio
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, path)
@@ -278,7 +292,7 @@ func (l *Library) add(p string, f found) {
 
 // lookup busca o vídeo no TMDB (fora do lock: é rede). Falhou: tenta de novo mais tarde, com espera crescente.
 func (l *Library) lookup(r *record) {
-	if l.tmdb.token == "" {
+	if !l.tmdb.hasToken() {
 		return
 	}
 	err := func() error {
@@ -356,7 +370,7 @@ func (l *Library) lookup(r *record) {
 
 // retryTmdb: vídeos guardados sem TMDB (antes da chave, ou a rede falhou); no máximo 5 tentativas por vídeo.
 func (l *Library) retryTmdb() {
-	if l.tmdb.token == "" {
+	if !l.tmdb.hasToken() {
 		return
 	}
 	l.mu.Lock()
@@ -437,7 +451,13 @@ func resumeAt(pos, dur float64) float64 {
 func (l *Library) byID(id string) *record {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.files[id]
+	r := l.files[id]
+	if r == nil {
+		return nil
+	}
+	c := *r // cópia: quem chamou lê sem o lock, e o scan pode trocar as fatias do original
+	c.ExtSubs = append([]extSub(nil), r.ExtSubs...)
+	return &c
 }
 
 func (l *Library) byPath(p string) *record {
@@ -471,15 +491,27 @@ func (l *Library) setProgress(id string, pos, dur float64) bool {
 
 // ---------- assistidos ----------
 
+var historyMu sync.Mutex
+
+// readHistory lê os assistidos (chamar com historyMu). Arquivo ilegível é guardado como .bad, não sobrescrito.
 func readHistory() []map[string]any {
 	var h []map[string]any
 	if raw, err := os.ReadFile(historyF); err == nil {
-		json.Unmarshal(raw, &h)
+		if err := json.Unmarshal(raw, &h); err != nil {
+			os.Rename(historyF, historyF+".bad")
+			log.Printf("assistidos ilegível, guardado como .bad: %v", err)
+			return nil
+		}
 	}
 	return h
 }
 
-var historyMu sync.Mutex
+// history: cópia dos assistidos para quem não está com o lock.
+func history() []map[string]any {
+	historyMu.Lock()
+	defer historyMu.Unlock()
+	return readHistory()
+}
 
 // markWatched anota que o vídeo foi assistido até o fim (uma vez por dia por vídeo).
 func (l *Library) markWatched(r *record, when time.Time) {
