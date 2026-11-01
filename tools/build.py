@@ -187,6 +187,19 @@ def copy_adb(dest):
     print("adb:", dest)
 
 
+def copy_tv_app(dest):
+    """O app da TV (gerado por build_tvcache.py) vai dentro do onVLC: o assistente instala ele na TV pela rede."""
+    apk, meta = ROOT / "dist" / "tvcache.apk", ROOT / "dist" / "tv.json"
+    if not apk.is_file():
+        print("aviso: sem dist\tvcache.apk (rode tools\build_tvcache.py); o assistente não vai conseguir instalar")
+        return
+    dest.mkdir(exist_ok=True)
+    shutil.copy2(apk, dest / "onVLC-tv.apk")
+    if meta.is_file():
+        shutil.copy2(meta, dest / "tv.json")
+    print("app da TV:", dest)
+
+
 def stop_running():
     """Antes de trocar os arquivos de dist\\onVLC: pausa a tarefa (senão ela reabre a biblioteca no meio do build e o
     Windows não deixa apagar a pasta) e fecha a biblioteca e o player (autorizado pelo Lucas)."""
@@ -216,6 +229,7 @@ def main():
     trim(exe.parent / "_internal")
     shutil.copy2(lib_exe, exe.with_name(lib_exe.name))
     copy_adb(exe.parent / "adb")
+    copy_tv_app(exe.parent / "tv")
     # ícone dos atalhos fora de dist\ (que o build apaga): se o Windows olhar o atalho no meio do build, não guarda
     # um ícone em branco no cache
     ico = Path(os.environ["LOCALAPPDATA"]) / "onVLC" / f"{NAME}.ico"

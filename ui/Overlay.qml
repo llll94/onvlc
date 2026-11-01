@@ -10,6 +10,12 @@ Item {
     property bool libraryOpen: !player.state.hasMedia
     // voltou para a biblioteca com um filme aberto: o filme fecha (os controles do player não ficam por trás)
     onLibraryOpenChanged: if (libraryOpen && s.hasMedia) player.closeVideo()
+    // assistente "Configurar a TV" (ui/Setup.qml), por cima de tudo
+    property bool setupOpen: false
+    function openSetup(where) { menuOpen = false; popName = ""; setup.start(where); setupOpen = true }
+    // primeira vez, sem TV ligada a este PC: o assistente abre sozinho (depois de o player abrir o arquivo que veio
+    // no duplo clique, se veio: aí não abre)
+    Timer { running: true; interval: 600; onTriggered: if (setup.st.autoOpen && !root.s.hasMedia) root.openSetup("") }
 
     // cores e fontes
     readonly property color orange: "#ff8a1f"
@@ -189,6 +195,7 @@ Item {
                     { t: "Buscar na internet", v: "OpenSubtitles", act: "findWeb" }]
         case "ferramentas":
             return [{ t: "Informações da mídia", act: "info" }, { t: "Abrir no VLC original", act: "vlc" },
+                    { t: "Configurar a TV…", act: "setup:" },
                     { t: "Abrir vídeos sempre no onVLC", v: "Definir ›", act: "defaultApp" },
                     { t: "Efeitos e filtros", soon: true }, { t: "Converter / Salvar", soon: true }]
         case "exibir":
@@ -205,6 +212,10 @@ Item {
                     { t: "Mandar o vídeo atual", act: s.hasMedia ? "tvSend" : "" },
                     { t: "Escolher vídeos…", act: "tvAdd" },
                     { t: "Abrir pasta no Windows", act: "tvOpen" },
+                    { head: "Configurar" },
+                    { t: "TV", v: setup.st.hasTv ? setup.st.tvName : "nenhuma", act: "setup:tv" },
+                    { t: "Capas e sinopses (TMDB)", v: setup.st.tmdb && setup.st.tmdb.has ? "ligado" : "desligado", act: "setup:capas" },
+                    { t: "Legendas automáticas", v: setup.st.os && setup.st.os.has ? "ligado" : "desligado", act: "setup:legendas" },
                     { note: "Mandar põe o vídeo na pasta onVLC sem ocupar espaço a mais e sem tirar o original de onde está (de outro disco, ele é copiado). Legendas com o mesmo nome vão junto. Também dá para jogar arquivos direto na pasta pelo Explorer. Apagar daqui manda para a Lixeira do PC. Dois cliques num vídeo da lista tocam ele aqui." }]
         }
         return []
@@ -212,6 +223,7 @@ Item {
 
     function act(a) {
         if (a.indexOf("recent:") === 0) { menuOpen = false; player.openPath(a.substring(7)); return }
+        if (a.indexOf("setup:") === 0) { openSetup(a.substring(6)); return }
         switch (a) {
         case "open": menuOpen = false; player.openFile(); break
         case "library": menuOpen = false; libraryOpen = true; break
@@ -267,6 +279,7 @@ Item {
             return
         }
         e.accepted = true
+        if (setupOpen) { if (setupLoader.item) setupLoader.item.handleKey(e); return }
         if (libraryOpen && !menuOpen && popName === "" && libLoader.item && libLoader.item.handleKey(e)) return
         if (e.key === Qt.Key_Tab) { menuOpen = !menuOpen; if (menuOpen) showTop = true; return }
         if (e.key === Qt.Key_Escape) {
@@ -1247,7 +1260,8 @@ Item {
                         hoverEnabled: true
                         cursorShape: dst.ready ? Qt.PointingHandCursor : Qt.ArrowCursor
                         onClicked: {
-                            if (dst.modelData[3] === "watch") player.tvWatch()
+                            // sem TV ligada a este PC: em vez do erro, o assistente
+                            if (dst.modelData[3] === "watch") { if (setup.st.hasTv) player.tvWatch(); else root.openSetup("") }
                             else if (dst.ready) { player.tvSendCurrent(); root.popName = "" }
                         }
                     }
@@ -1520,6 +1534,21 @@ Item {
                 }
             }
         }
+    }
+
+    // ---------- assistente ----------
+    Loader {
+        id: setupLoader
+        anchors.fill: parent
+        z: 50
+        active: root.setupOpen
+        source: "Setup.qml"
+        onLoaded: item.font = root.uiFont
+        onActiveChanged: if (!active) root.forceActiveFocus()
+    }
+    Connections {
+        target: setupLoader.item
+        function onClose() { root.setupOpen = false }
     }
 
     // ---------- bordas para redimensionar a janela ----------

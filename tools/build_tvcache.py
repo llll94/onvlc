@@ -5,6 +5,7 @@ Uso: python tools\\build_tvcache.py [--no-install]
 """
 import glob
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -133,6 +134,8 @@ def main():
     apk.parent.mkdir(exist_ok=True)
     run(bt / "apksigner.bat", "sign", "--ks", ks, "--ks-pass", "env:ONVLC_KS", "--out", apk, aligned,
         env=dict(env, ONVLC_KS=pw))
+    # a versão vai junto: o assistente do PC só reinstala na TV quando o app dela é mais velho
+    (ROOT / "dist" / "tv.json").write_text(json.dumps({"versionCode": code}), encoding="utf-8")
     print("pronto:", apk)
 
     if "--no-install" not in sys.argv:

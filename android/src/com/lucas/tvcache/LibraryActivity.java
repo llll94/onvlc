@@ -5,7 +5,10 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.KeyEvent;
+import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
@@ -24,6 +27,8 @@ import org.json.JSONObject;
  * fica transparente e desenha a barra e os menus por cima. A posição vai para o PC a cada 10 s e ao parar.
  *
  * "Assistir na TV" do PC abre esta tela pelo adb com extras: play (id do vídeo) + pos (ms), ou stop.
+ * O assistente "Configurar a TV" do PC abre com pc ("http://IP:8780": onde o PC está, sem procurar) e selftest (toca o
+ * vídeo de teste e conta o resultado). Os dois também valem pelo link onvlc://abrir?pc=...&selftest=1.
  */
 public class LibraryActivity extends Activity implements VideoPlayer.Listener {
     private WebView web;
@@ -32,6 +37,13 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
     private double lastSent = -1;
     private boolean pageReady;
     private JSONObject pendingPlay;  // pedido do PC esperando a página carregar
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    // modo teste
+    private boolean testing, testPlaying, testBuffering;
+    private int testStalls;
+    private double testMax;
+    private String testBase;
+    private JSONObject testRes;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -75,9 +87,26 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
         handleIntent(intent);
     }
 
-    /** Pedidos do PC: tocar um vídeo da biblioteca num ponto, ou parar o que está tocando. */
+    /** Pedidos do PC: onde ele está, teste, tocar um vídeo da biblioteca num ponto, ou parar o que está tocando. */
     private void handleIntent(Intent i) {
         if (i == null) return;
+        Uri link = i.getData();
+        if (link != null && "onvlc".equals(link.getScheme())) {
+            i.setData(null);
+            if (link.getQueryParameter("pc") != null) PcFinder.use(this, link.getQueryParameter("pc"));
+            if ("1".equals(link.getQueryParameter("selftest"))) startSelfTest();
+            return;
+        }
+        String pc = i.getStringExtra("pc");
+        if (pc != null) {
+            i.removeExtra("pc");
+            PcFinder.use(this, pc);
+        }
+        if (i.getBooleanExtra("selftest", false)) {
+            i.removeExtra("selftest");
+            startSelfTest();
+            return;
+        }
         if (i.getBooleanExtra("stop", false)) {
             i.removeExtra("stop");
             if (player.active()) {
@@ -106,8 +135,88 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
         });
     }
 
+    // ---------- modo teste ----------
+    /** Mede a rede, lê o que a TV suporta e toca 10 s do vídeo de teste do PC, com a página escondida. */
+    private void startSelfTest() {
+        if (testing) return;
+        if (player.active()) {
+            player.stop(true);
+            web.evaluateJavascript("window.onPlayerClosed && onPlayerClosed()", null);
+        }
+        testing = true;
+        new Thread(() -> {
+            String b = null;
+            for (int i = 0; i < 30 && (b = PcFinder.base()) == null; i++) {  // acabou de saber onde o PC está
+                PcFinder.search(this);
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+            if (b == null) {
+                runOnUiThread(() -> testing = false);
+                return;
+            }
+            JSONObject r = SelfTest.caps(this);
+            try {
+                r.put("speed", Math.round(SelfTest.speed(b) * 10) / 10.0).put("done", false);
+            } catch (Exception e) {
+                // segue
+            }
+            SelfTest.post(b, r);
+            final String base0 = b;
+            runOnUiThread(() -> {
+                if (!testing) return;
+                testBase = base0;
+                testRes = r;
+                testMax = 0;
+                testStalls = 0;
+                testPlaying = false;
+                testBuffering = false;
+                web.setVisibility(View.INVISIBLE);
+                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                player.open("selftest", base0 + "/api/selftest", 0, new String[0]);
+                ui.postDelayed(this::finishSelfTest, 30_000);  // segurança: o vídeo não andou
+            });
+        }, "selftest").start();
+    }
+
+    private void selfTestState(JSONObject st) {
+        String s = st.optString("state");
+        boolean buf = st.optDouble("buffering", 100) < 100;
+        if ("playing".equals(s)) testPlaying = true;
+        if (testPlaying && buf && !testBuffering) testStalls++;  // travou depois de começar
+        testBuffering = buf;
+        testMax = Math.max(testMax, st.optDouble("time", 0));
+        if (testMax >= 9.5 || "ended".equals(s)) finishSelfTest();
+    }
+
+    private void finishSelfTest() {
+        if (!testing) return;
+        testing = false;
+        ui.removeCallbacksAndMessages(null);
+        player.stop(false);
+        web.setVisibility(View.VISIBLE);
+        web.requestFocus();
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        final JSONObject r = testRes;
+        final String b = testBase;
+        if (r == null || b == null) return;
+        try {
+            r.put("played", Math.round(testMax * 10) / 10.0).put("stalls", Math.max(0, testStalls)).put("done", true);
+        } catch (Exception e) {
+            // segue
+        }
+        new Thread(() -> SelfTest.post(b, r), "selftest-post").start();
+    }
+
     @Override
     public void onBackPressed() {
+        if (testing) {
+            finishSelfTest();
+            return;
+        }
         web.evaluateJavascript("window.tvBack ? tvBack() : false", v -> {
             if (!"true".equals(v)) finish();
         });
@@ -301,6 +410,10 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
     // ---------- VideoPlayer.Listener ----------
     @Override
     public void onState(JSONObject st) {
+        if (testing) {
+            selfTestState(st);
+            return;
+        }
         // o estado do cache já vem em JSON: entra no texto como está (sem ler e escrever de novo a cada meio segundo)
         String js = st.toString();
         try {
@@ -318,6 +431,10 @@ public class LibraryActivity extends Activity implements VideoPlayer.Listener {
 
     @Override
     public void onStopped(String id, double pos, double dur, boolean ended) {
+        if ("selftest".equals(id)) {
+            finishSelfTest();
+            return;
+        }
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         stopService(new Intent(this, CacheService.class));
         final String b = base;

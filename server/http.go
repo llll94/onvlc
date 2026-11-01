@@ -34,6 +34,7 @@ import (
 //	GET  /tv/<arquivo>              a página da TV; /tv/api/* e /tv/img/* também valem
 //	POST /api/progress {id,pos,dur} onde parou (nos créditos vira "assistido")
 //	POST /api/watched  {id|path}    o player do PC chegou ao fim
+//	(e as do assistente "Configurar a TV", em setup.go)
 type server struct {
 	lib *Library
 	ui  string
@@ -55,6 +56,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(500)
 		}
 	}()
+	noteClient(r)
 	p := r.URL.Path
 	if strings.HasPrefix(p, "/tv/api/") || strings.HasPrefix(p, "/tv/img/") {
 		p = p[3:]
@@ -67,6 +69,9 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.post(w, r, p)
 		return
 	case "GET", "HEAD":
+		if s.setupGet(w, r, p) {
+			return
+		}
 	default:
 		w.WriteHeader(405)
 		return
@@ -171,6 +176,9 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) post(w http.ResponseWriter, r *http.Request, p string) {
+	if s.setupPost(w, r, p) {
+		return
+	}
 	var body struct {
 		ID   string  `json:"id"`
 		Path string  `json:"path"`

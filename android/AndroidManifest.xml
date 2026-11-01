@@ -35,6 +35,13 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- o assistente do PC abre o app por um link: onvlc://abrir?pc=http://IP:8780 (e &selftest=1) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="onvlc" />
+            </intent-filter>
         </activity>
 
         <service

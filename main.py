@@ -31,6 +31,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QWidget  # noqa: E402
 import opensubs  # noqa: E402
 import thumbs  # noqa: E402
 import tvfolder  # noqa: E402
+import tvsetup  # noqa: E402
 import tvstream  # noqa: E402
 
 try:
@@ -152,6 +153,8 @@ class Player(QObject):
         self.overlay.setFlags(Qt.Tool | Qt.FramelessWindowHint)
         self.overlay.setResizeMode(QQuickView.SizeRootObjectToView)
         self.overlay.rootContext().setContextProperty("player", self)
+        self.setup = tvsetup.Setup(self)  # assistente "Configurar a TV" (ui/Setup.qml)
+        self.overlay.rootContext().setContextProperty("setup", self.setup)
         self.overlay.setSource(QUrl.fromLocalFile(str(HERE / "ui" / "Overlay.qml")))
         if self.overlay.status() == QQuickView.Error:
             for err in self.overlay.errors():

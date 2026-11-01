@@ -35,6 +35,19 @@ final class PcFinder {
         return base;
     }
 
+    /** O assistente do PC abriu o app dizendo onde o PC está ("http://IP:8780"): usa esse endereço, sem varrer a rede. */
+    static void use(Context ctx, String pcUrl) {
+        String host = android.net.Uri.parse(pcUrl).getHost();
+        if (host == null) return;
+        ctx.getSharedPreferences("pc", Context.MODE_PRIVATE).edit().putString("ip", host).commit();
+        synchronized (PcFinder.class) {
+            lastScan = 0;
+            scanGap = 30_000;
+        }
+        if (base != null && !base.equals(url(host))) base = null;
+        search(ctx);
+    }
+
     /** O PC parou de responder: procura de novo em segundo plano. */
     static void lost(Context ctx) {
         search(ctx);
