@@ -19,8 +19,13 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VLC_DIR = r"C:\Program Files\VideoLAN\VLC"
+# o motor do VLC: o que vai dentro do onVLC (pasta vlc ao lado do .exe); rodando o .py, o VLC instalado no PC
+_OWN_VLC = Path(sys.executable).with_name("vlc")
+VLC_DIR = (str(_OWN_VLC) if getattr(sys, "frozen", False) and (_OWN_VLC / "libvlc.dll").is_file()
+           else r"C:\Program Files\VideoLAN\VLC")
 os.environ.setdefault("PYTHON_VLC_MODULE_PATH", VLC_DIR)
+os.environ.setdefault("PYTHON_VLC_LIB_PATH", os.path.join(VLC_DIR, "libvlc.dll"))
+os.environ.setdefault("VLC_PLUGIN_PATH", os.path.join(VLC_DIR, "plugins"))
 
 import vlc  # noqa: E402
 from PySide6.QtCore import QEvent, QObject, Property, QSettings, Qt, QTimer, QUrl, Signal, Slot  # noqa: E402
@@ -793,6 +798,12 @@ class Player(QObject):
                 # 2. caixa e TV
                 if not self.box.connect(lambda m: self._watchState.emit({"stage": "wake", "title": title})):
                     raise RuntimeError(f"A TV ({self.box.name}) não respondeu. Ela está ligada na tomada?")
+                # o app da TV mais velho que o deste onVLC: o PC atualiza antes (ele faz o papel da loja)
+                if tvsetup.tv_app_outdated(self.box):
+                    self._watchState.emit({"stage": "update", "title": title})
+                    ok, msg = tvsetup.install_apk(
+                        self.box, lambda pct: self._watchState.emit({"stage": "update", "title": title, "p": pct}))
+                    log.info("atualizar o app da TV: %s", msg)
                 self.box.wake_screen()
                 if not self.box.ensure_tv(lambda m: self._watchState.emit({"stage": "tv", "title": title})):
                     log.warning("a TV não ligou; mandando mesmo assim")
@@ -1080,6 +1091,15 @@ def _start_library():
 
 def main():
     setup_log()
+    # o instalador chama estas duas, sem janela
+    if "--registrar" in sys.argv or "--desregistrar" in sys.argv:
+        import winsetup
+        if "--registrar" in sys.argv:
+            winsetup.register_all(Path(sys.executable))
+        else:
+            winsetup.unregister()
+        log.info("onVLC %s no Windows", "registrado" if "--registrar" in sys.argv else "desregistrado")
+        return
     # a biblioteca (onvlc-biblioteca.exe) abre antes da janela, em paralelo: quando a tela pedir a lista, ela já responde
     threading.Thread(target=_start_library, daemon=True).start()
     QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGL)

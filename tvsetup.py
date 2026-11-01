@@ -85,6 +85,46 @@ if ($a) {{
     return d
 
 
+def tv_app_version(box):
+    m = re.search(r"versionCode=(\d+)", box.shell(f"dumpsys package {tvstream.APP_PKG} | grep -m1 versionCode="))
+    return int(m.group(1)) if m else 0
+
+
+def tv_app_outdated(box):
+    """A TV não tem o app, ou tem um mais velho que o que veio com este onVLC (o PC faz o papel da loja)."""
+    apk, code = bundled_apk()
+    have = tv_app_version(box)
+    return not have or bool(apk and code > have)
+
+
+def install_apk(box, progress=lambda p: None):
+    """Manda o app para a TV (o progresso é o tamanho que já chegou lá) e instala. Devolve (deu certo, mensagem).
+    Precisa do adb já conectado e autorizado."""
+    apk, _ = bundled_apk()
+    if not apk:
+        return False, "O app da TV não veio junto com este onVLC."
+    size = apk.stat().st_size
+    tmp = "/data/local/tmp/onvlc-tv.apk"
+    p = subprocess.Popen([box.adb, "-s", box.serial, "push", str(apk), tmp], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+    while p.poll() is None:
+        m = re.search(r"\d+", box.shell(f"stat -c %s {tmp} 2>/dev/null", timeout=5))
+        if m:
+            progress(min(99, int(m.group(0)) * 100 // size))
+        time.sleep(0.4)
+    if p.returncode != 0:
+        return False, "O app não chegou na TV. A rede caiu? Tente de novo."
+    progress(100)
+    out = box.shell(f"pm install -r {tmp}", timeout=180)  # o exec-in não devolveria o "Success"
+    box.shell(f"rm -f {tmp}")
+    log.info("instalar na TV: %s", out.strip()[:300])
+    if "Success" in out:
+        return True, "onVLC instalado na TV."
+    if "UPDATE_INCOMPATIBLE" in out:
+        return False, "Já existe outro onVLC na TV, assinado com outra chave. Desinstale o de lá e tente de novo."
+    return False, "A TV não aceitou a instalação: " + out.strip()[-160:]
+
+
 class Setup(QObject):
     changed = Signal()
     _upd = Signal(object)  # mudanças vindas das threads de trabalho
@@ -355,40 +395,15 @@ class Setup(QObject):
                                                        "\"Permitir depuração USB?\" e tente de novo."})
 
     def _push_apk(self, box, alive):
-        apk, code = bundled_apk()
-        have = re.search(r"versionCode=(\d+)", box.shell(f"dumpsys package {tvstream.APP_PKG} | grep -m1 versionCode="))
-        have = int(have.group(1)) if have else 0
-        if have and (not apk or have >= code):
+        if not tv_app_outdated(box):
             self.put(install={"phase": "done", "msg": "O onVLC já estava instalado na TV."})
             return
-        if not apk:
+        if not bundled_apk()[0]:
             self.put(install={"phase": "error", "msg": "O app da TV não veio junto com este onVLC."})
             return
         self.put(install={"phase": "sending", "p": 0})
-        size = apk.stat().st_size
-        tmp = "/data/local/tmp/onvlc-tv.apk"
-        # envia o arquivo (o progresso é o tamanho que já chegou na TV) e depois instala de lá
-        p = subprocess.Popen([box.adb, "-s", box.serial, "push", str(apk), tmp], stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
-        while p.poll() is None:
-            m = re.search(r"\d+", box.shell(f"stat -c %s {tmp} 2>/dev/null", timeout=5))
-            if m:
-                self.set(install={"p": min(99, int(m.group(0)) * 100 // size)})
-            time.sleep(0.4)
-        if p.returncode != 0:
-            self.put(install={"phase": "error", "msg": "O app não chegou na TV. A rede caiu? Tente de novo."})
-            return
-        self.set(install={"p": 100})
-        out = box.shell(f"pm install -r {tmp}", timeout=180)
-        box.shell(f"rm -f {tmp}")
-        log.info("instalar na TV: %s", out.strip()[:300])
-        if "Success" in out:
-            self.put(install={"phase": "done", "msg": "onVLC instalado na TV."})
-        elif "UPDATE_INCOMPATIBLE" in out:
-            self.put(install={"phase": "error", "msg": "Já existe outro onVLC na TV, assinado com outra chave. "
-                                                       "Desinstale o de lá e tente de novo."})
-        else:
-            self.put(install={"phase": "error", "msg": "A TV não aceitou a instalação: " + out.strip()[-160:]})
+        ok, msg = install_apk(box, lambda p: self.set(install={"p": p}))
+        self.put(install={"phase": "done" if ok else "error", "msg": msg})
 
     @Slot()
     def retryInstall(self):

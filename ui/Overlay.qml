@@ -120,7 +120,7 @@ Item {
     // abre o balão sozinho no começo e quando algo acontece (TV desligada, outra janela, erro)
     onWatchStageChanged: {
         if (watchStage === "connect") seenStages = ["connect"]
-        else if (["library", "wake", "tv", "open"].indexOf(watchStage) >= 0 && seenStages.indexOf(watchStage) < 0)
+        else if (["library", "wake", "update", "tv", "open"].indexOf(watchStage) >= 0 && seenStages.indexOf(watchStage) < 0)
             seenStages = seenStages.concat([watchStage])
         if (watchStage === "connect" || watchStage === "ended") showWatch()
     }
@@ -1169,8 +1169,9 @@ Item {
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
                         text: ({ connect: "Conectando na TV", library: "Colocando na biblioteca", wake: "Acordando a TV",
+                                 update: "Atualizando o onVLC da TV",
                                  tv: "Ligando a TV", open: "Abrindo no onVLC da TV" })[parent.modelData]
-                              + (parent.modelData === "library" && parent.current && watchCol.w.p ? " " + watchCol.w.p + "%" : "")
+                              + ((parent.modelData === "library" || parent.modelData === "update") && parent.current && watchCol.w.p ? " " + watchCol.w.p + "%" : "")
                               + (parent.current ? "…" : "")
                         color: parent.current ? "white" : root.mutedText
                         font.family: root.uiFont; font.pixelSize: 13

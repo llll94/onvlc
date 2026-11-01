@@ -13,6 +13,7 @@ import glob
 import json
 import os
 import shutil
+import sys
 import threading
 import time
 import urllib.error
@@ -54,6 +55,11 @@ def to_recycle_bin(path):
 
 # ---------- ffmpeg ----------
 def find_tool(name):
+    # o que vai dentro do onVLC (pasta ffmpeg ao lado do .exe) vem primeiro
+    if getattr(sys, "frozen", False):
+        own = os.path.join(os.path.dirname(sys.executable), "ffmpeg", name + ".exe")
+        if os.path.isfile(own):
+            return own
     found = shutil.which(name)
     if found:
         return found

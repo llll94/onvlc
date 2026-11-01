@@ -20,10 +20,18 @@ const (
 
 var toolCache sync.Map
 
-// findTool: ffmpeg/ffprobe no PATH ou no pacote do winget (procurado uma vez só).
+// findTool: ffmpeg/ffprobe da pasta ffmpeg ao lado do .exe, do PATH ou do pacote do winget (procurado uma vez só).
 func findTool(name string) string {
 	if v, ok := toolCache.Load(name); ok {
 		return v.(string)
+	}
+	// o que vai dentro do onVLC (pasta ffmpeg ao lado da biblioteca) vem primeiro
+	if exe, err := os.Executable(); err == nil {
+		own := filepath.Join(filepath.Dir(exe), "ffmpeg", name+".exe")
+		if _, err := os.Stat(own); err == nil {
+			toolCache.Store(name, own)
+			return own
+		}
 	}
 	found, err := exec.LookPath(name)
 	if err != nil {

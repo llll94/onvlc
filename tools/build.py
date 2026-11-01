@@ -1,78 +1,48 @@
-﻿"""Gera dist\\onVLC\\onVLC.exe, cria atalhos na Área de Trabalho e no Menu Iniciar
-e registra o app como player de vídeo do Windows.
+﻿"""Gera dist\\onVLC\\ (onVLC.exe + biblioteca + VLC + ffmpeg + adb + app da TV), cria atalhos na Área de Trabalho e
+no Menu Iniciar e registra o app como player de vídeo do Windows.
+
+Tudo o que o onVLC usa vai dentro da pasta: quem instala (tools\\build_installer.py) não precisa ter nada no PC.
 
 Uso: python tools\\build.py
 """
-import ctypes
+import hashlib
 import os
 import shutil
 import subprocess
 import sys
 import time
-import winreg
+import urllib.request
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from tvfolder import VIDEO_EXTS  # noqa: E402  (mesma lista do main.py, sem carregar o VLC)
+import winsetup  # noqa: E402
 
-NAME = "onVLC"
-PROG_ID = "PlayerLucas.Video"  # mantido: é por ele que o Windows lembra a escolha de app padrão
-CAPS = rf"Software\PlayerLucas\{NAME}\Capabilities"
+NAME = winsetup.NAME
 DESKTOP = Path(os.environ["USERPROFILE"]) / "Desktop"
 START_MENU = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
-
-
-def _set(path, name, value):
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path) as k:
-        winreg.SetValueEx(k, name, 0, winreg.REG_SZ, value)
-
-
-def _delete_tree(path):
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_ALL_ACCESS) as k:
-            while True:
-                try:
-                    _delete_tree(path + "\\" + winreg.EnumKey(k, 0))
-                except OSError:
-                    break
-        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
-    except FileNotFoundError:
-        pass
+VLC_SRC = Path(r"C:\Program Files\VideoLAN\VLC")  # o motor sai do VLC instalado neste PC
+# o que o player não usa do VLC: a interface própria dele, controles remotos, gravar/transmitir, visualizações
+VLC_PLUGINS_DROP = {"gui", "control", "stream_out", "access_output", "mux", "visualization", "video_splitter"}
+FFMPEG_VER = "9.0.2"
+FFMPEG_ZIP = f"https://github.com/GyanD/codexffmpeg/releases/download/{FFMPEG_VER}/ffmpeg-{FFMPEG_VER}-essentials_build.zip"
+FFMPEG_SHA256 = "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba"
 
 
 def remove_old_name():
     """Tira o que ficou do tempo em que o app se chamava "VLC"."""
+    import winreg
     for lnk in (DESKTOP / "VLC.lnk", START_MENU / "VLC.lnk"):
         lnk.unlink(missing_ok=True)
-    _delete_tree(r"Software\Classes\Applications\VLC.exe")
-    _delete_tree(r"Software\PlayerLucas\VLC")
+    winsetup.delete_tree(r"Software\Classes\Applications\VLC.exe")
+    winsetup.delete_tree(r"Software\PlayerLucas\VLC")
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\RegisteredApplications", 0, winreg.KEY_SET_VALUE) as k:
             winreg.DeleteValue(k, "VLC Lucas")
     except FileNotFoundError:
         pass
     shutil.rmtree(ROOT / "dist" / "VLC", ignore_errors=True)
-
-
-def register_app(exe):
-    """Aparece em "Abrir com" e em Configurações → Aplicativos padrão. Só o usuário escolhe o padrão."""
-    cmd = f'"{exe}" "%1"'
-    _set(rf"Software\Classes\{PROG_ID}", "", "Vídeo")
-    _set(rf"Software\Classes\{PROG_ID}\DefaultIcon", "", f"{exe},0")
-    _set(rf"Software\Classes\{PROG_ID}\shell\open\command", "", cmd)
-    _set(rf"Software\Classes\Applications\{NAME}.exe", "FriendlyAppName", NAME)
-    _set(rf"Software\Classes\Applications\{NAME}.exe\shell\open\command", "", cmd)
-    _set(CAPS, "ApplicationName", NAME)
-    _set(CAPS, "ApplicationDescription", "Player de vídeo do Lucas, com motor do VLC")
-    _set(CAPS, "ApplicationIcon", f"{exe},0")
-    for ext in sorted(VIDEO_EXTS):
-        _set(CAPS + r"\FileAssociations", ext, PROG_ID)
-        _set(rf"Software\Classes\{ext}\OpenWithProgids", PROG_ID, "")
-        _set(rf"Software\Classes\Applications\{NAME}.exe\SupportedTypes", ext, "")
-    _set(r"Software\RegisteredApplications", NAME, CAPS)
-    ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)  # SHCNE_ASSOCCHANGED
-    print("registrado como app de vídeo:", NAME)
 
 
 def build_library():
@@ -122,61 +92,44 @@ def trim(internal):
     print(f"Qt: {before / 2**20:.0f} MB -> {after / 2**20:.0f} MB")
 
 
-TASK = "onVLC biblioteca"
+def copy_vlc(dest):
+    """O motor do VLC (libvlc + plugins) vai dentro do onVLC: quem instala não precisa ter o VLC."""
+    if not (VLC_SRC / "libvlc.dll").is_file():
+        sys.exit(f"VLC não encontrado em {VLC_SRC} (winget install VideoLAN.VLC)")
+    dest.mkdir(exist_ok=True)
+    for name in ("libvlc.dll", "libvlccore.dll", "COPYING.txt"):
+        shutil.copy2(VLC_SRC / name, dest / name)
+    shutil.copytree(VLC_SRC / "plugins", dest / "plugins", dirs_exist_ok=True,
+                    ignore=lambda d, names: [n for n in names if Path(d) == VLC_SRC / "plugins" and n in VLC_PLUGINS_DROP]
+                    + [n for n in names if n == "plugins.dat"])
+    # a lista de plugins pronta (sem ela o VLC lê todos a cada abertura): feita para esta pasta
+    subprocess.run([str(VLC_SRC / "vlc-cache-gen.exe"), str(dest / "plugins")], check=True, capture_output=True)
+    size = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file())
+    print(f"VLC: {dest} ({size / 2**20:.0f} MB)")
 
 
-def start_with_windows(lib_exe):
-    """Mantém a biblioteca aberta enquanto o PC está ligado (a TV acha o PC sempre): uma tarefa do Windows abre ela
-    no login, ao voltar da suspensão e a cada minuto se ela tiver fechado. Enquanto ela está aberta, a tarefa
-    não abre outra (e, se alguém abrir, a segunda vê a porta ocupada e sai na hora)."""
-    user = os.environ["USERDOMAIN"] + "\\" + os.environ["USERNAME"]
-    resume = ("&lt;QueryList&gt;&lt;Query Id=\"0\" Path=\"System\"&gt;&lt;Select Path=\"System\"&gt;"
-              "*[System[Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and EventID=1]]"
-              "&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;")
-    start = time.strftime("%Y-%m-%dT%H:%M:%S")  # a conferência de 1 em 1 min começa já (e continua para sempre)
-    xml = f"""<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Description>Mantém a biblioteca do onVLC aberta para a TV achar o PC</Description></RegistrationInfo>
-  <Triggers>
-    <LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId></LogonTrigger>
-    <TimeTrigger>
-      <StartBoundary>{start}</StartBoundary><Enabled>true</Enabled>
-      <Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition>
-    </TimeTrigger>
-    <EventTrigger><Enabled>true</Enabled><Subscription>{resume}</Subscription></EventTrigger>
-  </Triggers>
-  <Principals><Principal id="Author"><UserId>{user}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit><StartWhenAvailable>true</StartWhenAvailable><Hidden>true</Hidden>
-    <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>
-  </Settings>
-  <Actions Context="Author"><Exec><Command>{lib_exe}</Command><WorkingDirectory>{lib_exe.parent}</WorkingDirectory></Exec></Actions>
-</Task>
-"""
-    tmp = ROOT / "build" / "biblioteca-task.xml"
-    tmp.parent.mkdir(exist_ok=True)
-    tmp.write_text(xml, encoding="utf-16")
-    r = subprocess.run(["schtasks", "/Create", "/TN", TASK, "/XML", str(tmp), "/F"], capture_output=True, text=True)
-    if r.returncode == 0:
-        # a entrada antiga de "abrir com o Windows" sai: a tarefa faz o mesmo e mais
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0,
-                                winreg.KEY_SET_VALUE) as k:
-                winreg.DeleteValue(k, TASK)
-        except FileNotFoundError:
-            pass
-        print("biblioteca: tarefa do Windows (login, volta da suspensão e a cada 1 min):", lib_exe)
-    else:  # sem permissão para a tarefa: fica pelo menos abrindo no login
-        _set(r"Software\Microsoft\Windows\CurrentVersion\Run", TASK, f'"{lib_exe}"')
-        print("biblioteca abre com o Windows (a tarefa não pôde ser criada:", (r.stderr or r.stdout).strip(), ")")
+def copy_ffmpeg(dest):
+    """ffmpeg/ffprobe (a biblioteca lê os vídeos e faz as miniaturas): versão "essentials", baixada uma vez e conferida."""
+    cache = ROOT / "build" / "ffmpeg" / f"ffmpeg-{FFMPEG_VER}-essentials_build.zip"
+    if not cache.is_file():
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        print("› baixando o ffmpeg", FFMPEG_VER)
+        urllib.request.urlretrieve(FFMPEG_ZIP, cache)
+    if hashlib.sha256(cache.read_bytes()).hexdigest() != FFMPEG_SHA256:
+        cache.unlink()
+        sys.exit("o ffmpeg baixado não confere (SHA-256): rode de novo")
+    dest.mkdir(exist_ok=True)
+    with zipfile.ZipFile(cache) as z:
+        for n in z.namelist():
+            base = n.rsplit("/", 1)[-1]
+            if base in ("ffmpeg.exe", "ffprobe.exe", "LICENSE"):
+                (dest / base).write_bytes(z.read(n))
+    print("ffmpeg:", dest)
 
 
 def copy_adb(dest):
     """O adb (instalar e abrir o app na TV) vai dentro do onVLC: quem instala não precisa ter nada. Copiado do
     instalado neste PC (winget install Google.PlatformTools), para os dois serem da mesma versão e não brigarem."""
-    sys.path.insert(0, str(ROOT))
     import tvstream
     src = Path(tvstream.find_adb())
     if not src.is_file():
@@ -191,7 +144,7 @@ def copy_tv_app(dest):
     """O app da TV (gerado por build_tvcache.py) vai dentro do onVLC: o assistente instala ele na TV pela rede."""
     apk, meta = ROOT / "dist" / "tvcache.apk", ROOT / "dist" / "tv.json"
     if not apk.is_file():
-        print("aviso: sem dist\tvcache.apk (rode tools\build_tvcache.py); o assistente não vai conseguir instalar")
+        print("aviso: sem dist\\tvcache.apk (rode tools\\build_tvcache.py); o assistente não vai conseguir instalar")
         return
     dest.mkdir(exist_ok=True)
     shutil.copy2(apk, dest / "onVLC-tv.apk")
@@ -203,9 +156,8 @@ def copy_tv_app(dest):
 def stop_running():
     """Antes de trocar os arquivos de dist\\onVLC: pausa a tarefa (senão ela reabre a biblioteca no meio do build e o
     Windows não deixa apagar a pasta) e fecha a biblioteca e o player (autorizado pelo Lucas)."""
-    subprocess.run(["schtasks", "/Change", "/TN", TASK, "/DISABLE"], capture_output=True)
-    for name in ("onvlc-biblioteca.exe", "onVLC.exe"):
-        subprocess.run(["taskkill", "/IM", name, "/F"], capture_output=True)
+    winsetup.stop_task()
+    subprocess.run(["taskkill", "/IM", f"{NAME}.exe", "/F"], capture_output=True)
     time.sleep(1)
 
 
@@ -228,8 +180,16 @@ def main():
     exe = ROOT / "dist" / NAME / f"{NAME}.exe"
     trim(exe.parent / "_internal")
     shutil.copy2(lib_exe, exe.with_name(lib_exe.name))
+    copy_vlc(exe.parent / "vlc")
+    copy_ffmpeg(exe.parent / "ffmpeg")
     copy_adb(exe.parent / "adb")
     copy_tv_app(exe.parent / "tv")
+    size = sum(f.stat().st_size for f in exe.parent.rglob("*") if f.is_file())
+    print(f"pacote: {size / 2**20:.0f} MB")
+    if "--sem-registrar" in sys.argv:  # só gerar (para o instalador), sem mexer nos atalhos e na tarefa deste PC
+        winsetup.resume_task()  # a biblioteca deste PC volta como estava
+        print("pronto:", exe)
+        return
     # ícone dos atalhos fora de dist\ (que o build apaga): se o Windows olhar o atalho no meio do build, não guarda
     # um ícone em branco no cache
     ico = Path(os.environ["LOCALAPPDATA"]) / "onVLC" / f"{NAME}.ico"
@@ -242,9 +202,8 @@ def main():
         subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True)
         print("atalho:", lnk)
     subprocess.run(["ie4uinit.exe", "-show"], capture_output=True)  # Windows relê os ícones
-    register_app(exe)
-    start_with_windows(exe.with_name(lib_exe.name))  # recria a tarefa (ligada)
-    subprocess.run(["schtasks", "/Run", "/TN", TASK], capture_output=True)  # e a biblioteca volta na hora
+    winsetup.register_all(exe)  # "Abrir com", tarefa da biblioteca (ligada de novo) e a biblioteca já rodando
+    print("registrado como app de vídeo; biblioteca na tarefa do Windows:", exe.with_name(lib_exe.name))
     remove_old_name()
     print("pronto:", exe)
 
