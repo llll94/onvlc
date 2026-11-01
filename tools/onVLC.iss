@@ -57,8 +57,9 @@ Name: "{autodesktop}\onVLC"; Filename: "{app}\onVLC.exe"; Tasks: desktopicon
 ; "Abrir com", a tarefa que mantém a biblioteca aberta e a biblioteca já rodando. runasoriginaluser: numa
 ; instalação "para todos", isso vale para quem está usando o PC, não para a conta de administrador da confirmação
 Filename: "{app}\onVLC.exe"; Parameters: "--registrar"; StatusMsg: "Preparando a biblioteca…"; Flags: runhidden waituntilterminated runasoriginaluser
-; a TV precisa chegar na biblioteca: só TCP 8780, só de endereços da rede local, só em rede Particular
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""onVLC biblioteca"" dir=in action=allow program=""{app}\onvlc-biblioteca.exe"" protocol=TCP localport=8780 remoteip=localsubnet profile=private enable=yes"; StatusMsg: "Liberando a TV no firewall…"; Flags: runhidden shellexec waituntilterminated; Verb: runas; Tasks: firewall
+; a TV precisa chegar na biblioteca: só TCP 8780, só de endereços da rede local, só em rede Particular. Numa só
+; confirmação do Windows: apaga as regras com o mesmo nome (de versões antigas, mais largas) e cria a nova
+Filename: "{cmd}"; Parameters: "/c """"{sys}\netsh.exe"" advfirewall firewall delete rule name=""onVLC biblioteca"" & ""{sys}\netsh.exe"" advfirewall firewall add rule name=""onVLC biblioteca"" dir=in action=allow program=""{app}\onvlc-biblioteca.exe"" protocol=TCP localport=8780 remoteip=localsubnet profile=private enable=yes"""; StatusMsg: "Liberando a TV no firewall…"; Flags: runhidden shellexec waituntilterminated; Verb: runas; Tasks: firewall
 Filename: "{app}\onVLC.exe"; Description: "Abrir o onVLC e configurar a TV"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallRun]
