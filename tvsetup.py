@@ -366,22 +366,21 @@ class Setup(QObject):
             return
         self.put(install={"phase": "sending", "p": 0})
         size = apk.stat().st_size
-        # instala mandando o arquivo pela própria conexão: assim dá para mostrar quanto já foi
-        p = subprocess.Popen([box.adb, "-s", box.serial, "exec-in", f"cmd package install -r -S {size}"],
-                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             creationflags=NO_WINDOW)
-        sent, last = 0, -1
-        with open(apk, "rb") as f:
-            while chunk := f.read(256 * 1024):
-                p.stdin.write(chunk)
-                sent += len(chunk)
-                pct = sent * 100 // size
-                if pct != last:
-                    last = pct
-                    self.set(install={"p": pct})
-        p.stdin.close()
-        out = p.stdout.read().decode(errors="replace")
-        p.wait(timeout=180)
+        tmp = "/data/local/tmp/onvlc-tv.apk"
+        # envia o arquivo (o progresso é o tamanho que já chegou na TV) e depois instala de lá
+        p = subprocess.Popen([box.adb, "-s", box.serial, "push", str(apk), tmp], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+        while p.poll() is None:
+            m = re.search(r"\d+", box.shell(f"stat -c %s {tmp} 2>/dev/null", timeout=5))
+            if m:
+                self.set(install={"p": min(99, int(m.group(0)) * 100 // size)})
+            time.sleep(0.4)
+        if p.returncode != 0:
+            self.put(install={"phase": "error", "msg": "O app não chegou na TV. A rede caiu? Tente de novo."})
+            return
+        self.set(install={"p": 100})
+        out = box.shell(f"pm install -r {tmp}", timeout=180)
+        box.shell(f"rm -f {tmp}")
         log.info("instalar na TV: %s", out.strip()[:300])
         if "Success" in out:
             self.put(install={"phase": "done", "msg": "onVLC instalado na TV."})
