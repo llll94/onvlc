@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"syscall"
@@ -155,7 +156,7 @@ func tray(lib *Library) {
 			case <-changes:
 				refresh()
 			case <-folder.ClickedCh:
-				exec.Command("explorer", libDir).Start()
+				exec.Command(filepath.Join(os.Getenv("SystemRoot"), "explorer.exe"), libDir).Start() // caminho completo
 			case <-quit.ClickedCh:
 				systray.Quit()
 				return

@@ -101,6 +101,13 @@ def main():
     # uma cópia da tela da biblioteca vai dentro do app, para a primeira vez sem PC
     assets = OUT / "assets"
     shutil.copytree(ROOT / "tvui", assets / "tvui")
+    # licenças dentro do app (ele leva a libVLC, LGPL/GPL, e é distribuído sozinho): assets/licencas/
+    lic = assets / "licencas"
+    lic.mkdir()
+    shutil.copy2(ROOT / "LICENSE", lic / "onVLC-GPL-3.0.txt")
+    shutil.copy2(ROOT / "THIRD_PARTY.md", lic / "TERCEIROS.md")
+    for f in (ROOT / "licenses").glob("*.txt"):
+        shutil.copy2(f, lic / f.name)
     base = OUT / "base.apk"
     # versão nova a cada APK (pelo número de commits): a tela inicial do Google TV só troca o ícone e o banner
     # guardados quando a versão do app muda

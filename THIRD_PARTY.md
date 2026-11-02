@@ -1,8 +1,9 @@
 # Programas de terceiros distribuídos com o onVLC
 
 O onVLC é licenciado sob a GPL-3.0-or-later (arquivo LICENSE). Os componentes abaixo vão junto no instalador ou no app
-da TV, cada um com a sua licença. O texto de cada licença acompanha o componente quando ele traz um (pastas `vlc\`,
-`ffmpeg\`, `_internal\` do instalador).
+da TV, cada um com a sua licença. O texto de cada licença acompanha o componente (pastas `vlc\` → `COPYING.txt`,
+`ffmpeg\` → `LICENSE`, `adb\` → `NOTICE.txt`, `licencas\` → uma pasta por pacote Python, a licença do Python e os textos da GPL-2.0, GPL-3.0,
+LGPL-2.1 e LGPL-3.0, que valem para o Qt, a libvlc e os pacotes que não trazem o texto).
 
 | Componente | Onde | Licença | Código-fonte |
 |---|---|---|---|

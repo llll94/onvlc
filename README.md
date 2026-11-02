@@ -8,14 +8,16 @@ Player de vídeo para Windows com o motor do VLC, que leva os seus filmes para a
 - **Configuração guiada:** depois de instalar no PC, um assistente acha a TV na rede, instala o app nela e testa imagem,
   som e velocidade. Ninguém digita endereço de IP.
 
-Tudo grátis, sem cadastro e sem nuvem: os filmes nunca saem da sua casa. Interface em português.
+Tudo grátis, sem cadastro e sem nuvem: os filmes nunca saem da sua casa (o que sai e para onde está em
+[SECURITY.md](SECURITY.md#privacidade)). Interface em português.
 
 ## Instalar
 
 1. Baixe o `instalar-onVLC-x.y.z.exe` da [versão mais nova](../../releases/latest).
 2. Abra. O Windows pode mostrar **"O Windows protegeu seu computador"**: o instalador não tem uma assinatura digital
    paga. Clique em **Mais informações → Executar assim mesmo**.
-3. Deixe marcada a opção de liberar a TV no firewall (o Windows pede confirmação).
+3. Deixe marcada a opção de liberar a TV no firewall (o Windows pede confirmação). Se o PC for usado por outras pessoas,
+   escolha instalar **para todos os usuários**: assim só um administrador consegue alterar os arquivos do onVLC.
 4. No fim, o onVLC abre o assistente. Tenha o controle da TV por perto.
 
 **Conferir o download (opcional):** no PowerShell, `Get-FileHash .\instalar-onVLC-x.y.z.exe` deve dar o mesmo valor
@@ -31,7 +33,7 @@ que está no `SHA256SUMS.txt` da versão. Cada versão também é analisada no V
 ### O que precisa
 
 - Windows 10 ou 11, 64 bits.
-- Uma TV (ou caixinha) com **Android TV ou Google TV**, no mesmo Wi-Fi do PC.
+- Uma TV (ou caixinha) com **Android TV ou Google TV** (Android 8 ou mais novo), no mesmo Wi-Fi do PC.
 - A rede do PC marcada como **Particular** no Windows (em rede "Pública" o firewall não deixa a TV falar com o PC; o
   assistente avisa).
 - Na TV, a **depuração USB** precisa ser ligada uma vez (o assistente mostra o passo a passo). É por ela que o PC instala

@@ -26,7 +26,7 @@ Notas do mantenedor (rede de casa, aparelhos, histórico de sessões) ficam fora
 Revisão completa em 01/11/2026; o modelo de hoje:
 
 - **Chave da biblioteca.** Na primeira execução a biblioteca cria um segredo aleatório em
-  `%LOCALAPPDATA%\onVLC\library\secret` (só o usuário lê). Todo pedido exige `X-onVLC-Key: <segredo>`, menos
+  `%LOCALAPPDATA%\onVLC\library\secret` (permissões do perfil: o usuário, o sistema e administradores). Todo pedido exige `X-onVLC-Key: <segredo>`, menos
   `/api/hello`, `/tv/*` e `/img/*` (`server\auth.go`). O player lê o arquivo (`library.key()`); a TV recebe o segredo
   pelo assistente.
 - **A TV reconhece o PC.** `/api/hello?nonce=N` devolve `auth = HMAC-SHA256(segredo, "hello:"+N)`; a TV
@@ -42,9 +42,9 @@ Revisão completa em 01/11/2026; o modelo de hoje:
 - **WebView da TV.** Só carrega `http://127.0.0.1:8090/<TOKEN>/...` (o `CacheServer`, com um token aleatório por
   processo nas rotas); navegação e recursos de fora são bloqueados (`shouldOverrideUrlLoading` /
   `shouldInterceptRequest`); CSP na `tvui\index.html`; depuração do WebView só na build `--debug`.
-- **Windows.** Programas do sistema sempre por caminho completo (`System32`); PowerShell elevado só com
-  `-EncodedCommand` e índice da placa (`tvsetup.run_elevated`); segredos só no Gerenciador de Credenciais (sem
-  fallback em texto puro); regra do firewall só TCP 8780, `remoteip=localsubnet`, perfil Particular.
+- **Windows.** Programas do sistema sempre por caminho completo (`System32`; o `git` das ferramentas de build vem do PATH); PowerShell elevado só com
+  `-EncodedCommand` e índice da placa (`tvsetup.run_elevated`); senhas (TMDB, OpenSubtitles) só no Gerenciador de
+  Credenciais, sem fallback em texto puro (a chave da biblioteca e o certificado da TV são arquivos do perfil); regra do firewall só TCP 8780, `remoteip=localsubnet`, perfil Particular.
 - **Assinatura do app da TV.** Chave **fora do repositório** (`%LOCALAPPDATA%\onVLC-dev\onvlc-tv.keystore`, senha no
   Gerenciador de Credenciais `onVLC`/`apk_keystore_v2`), certificado SHA-256
   `5a4de354aed556f11f200ce518e66b87fb4f86918ef2c47cc0ec6d48d074e0e4`. A chave anterior (pacote `com.lucas.tvcache`) vazou
@@ -52,8 +52,10 @@ Revisão completa em 01/11/2026; o modelo de hoje:
   aceitam mais atualização.** Guardar cópia fora do PC.
 - **Build.** ffmpeg e o AAR do libVLC conferidos por SHA-256; VLC e adb conferidos por assinatura digital (VideoLAN,
   Google); dependências Python com hash (`requirements.txt`, `--require-hashes`).
+- **Aberto sem chave, de propósito:** `/api/hello` (nome do PC, MAC), a página `/tv/*` e as imagens `/img/*` (capas e
+  miniaturas da linha do tempo; o nome da miniatura de arquivo fora da biblioteca é um HMAC do caminho).
 - Ainda **sem TLS** entre TV e PC (o segredo viaja em claro na rede de casa) e **sem assinatura de código** no instalador
-  (SmartScreen avisa). Ver `SECURITY.md`.
+  (SmartScreen avisa). Ver `SECURITY.md` (inclui o que vai para o TMDB e o OpenSubtitles).
 
 ---
 
@@ -74,8 +76,8 @@ Revisão completa em 01/11/2026; o modelo de hoje:
 | `server\library.go`, `listing.go`, `names.go`, `probe.go`, `thumbs.go`, `tmdb.go`, `positions.go`, `watch.go`, `main.go` | Índice e varredura, listagem (caminhos só para o PC), legendas (só arquivos comuns), ffprobe (`-i`), miniaturas, TMDB (token atômico, nomes de imagem validados), posições no registro, vigia da pasta, porta exclusiva + limite de 64 conexões |
 | `tvui\` | Página da biblioteca e do player da TV (texto sempre por `esc()`) |
 | `android\src\app\onvlc\tv\` | `LibraryActivity` (WebView + ponte `window.onvlc`), `PairActivity`, `PcFinder`, `CacheServer`, `VideoPlayer`, `SelfTest`, `Progress`, `CacheService` (`mediaPlayback`) |
-| `tools\build.py` | Gera `dist\onVLC\` com tudo dentro: biblioteca, `vlc\` (do VLC instalado ou de `build\vlc`), `ffmpeg\`, `adb\`, `tv\` (APK), `LICENSE`, `THIRD_PARTY.md`; `--sem-registrar` só gera |
-| `tools\build_tvcache.py` | APK sem Gradle (javac → d8 → aapt2 → zipalign → apksigner); `--debug` liga a depuração do WebView; `--no-install` só gera |
+| `tools\build.py` | Gera `dist\onVLC\` com tudo dentro: biblioteca, `vlc\` (do VLC instalado ou de `build\vlc`), `ffmpeg\`, `adb\` (com `NOTICE.txt`), `tv\` (APK), `licencas\` (licença de cada pacote Python + textos GPL/LGPL de `licenses\`), `LICENSE`, `THIRD_PARTY.md`; `--sem-registrar` só gera |
+| `tools\build_tvcache.py` | APK sem Gradle (javac → d8 → aapt2 → zipalign → apksigner); `--debug` liga a depuração do WebView; `--no-install` só gera; licenças em `assets/licencas/` |
 | `tools\build_installer.py` + `tools\onVLC.iss` | `dist\instalar-onVLC.exe` (Inno Setup): por usuário por padrão ou "para todos" (Arquivos de Programas); firewall estreito; desinstalar pergunta se apaga os dados |
 | `tools\release.py` | Release no GitHub (rascunho por padrão) com instalador, APK e `SHA256SUMS.txt`; confere o certificado do APK |
 | `tools\tvjs.py` | Roda JS na página da TV (só com a build `--debug`) |

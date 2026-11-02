@@ -146,6 +146,51 @@ def copy_ffmpeg(dest):
     print("ffmpeg:", dest)
 
 
+# pacotes que só servem para gerar o .exe (não vão no pacote): não entram na pasta de licenças
+BUILD_ONLY = {"pyinstaller", "pyinstaller-hooks-contrib", "altgraph", "pefile", "pyflakes", "setuptools", "packaging"}
+
+
+def copy_licenses(dest):
+    """O texto da licença de cada pacote Python que vai no .exe (LGPL e Apache pedem que vá junto) e a do Python."""
+    import importlib.metadata as md
+    import re
+    names = [re.split(r"[=\s]", ln)[0] for ln in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
+             if ln and not ln[0].isspace() and not ln.startswith("#")]
+    dest.mkdir(exist_ok=True)
+    n = 0
+    for name in names:
+        if name.lower() in BUILD_ONLY:
+            continue
+        try:
+            dist = md.distribution(name)
+        except md.PackageNotFoundError:
+            continue
+        # LICENSE/COPYING/NOTICE, ou qualquer texto da pasta licenses/ do pacote (o Qt guarda lá a LGPL); a licença
+        # comercial do Qt não vale para o onVLC (usamos a LGPL) e fica de fora
+        files = [f for f in (dist.files or [])
+                 if (re.search(r"(LICEN[CS]E|COPYING|NOTICE)", f.name, re.I) or "/licenses/" in str(f).lower().replace("\\", "/"))
+                 and "commercial" not in f.name.lower()]
+        out = dest / f"{dist.metadata['Name']}-{dist.version}"
+        out.mkdir(exist_ok=True)
+        for f in files:
+            src = Path(f.locate())
+            if src.is_file():
+                shutil.copy2(src, out / f.name)
+                n += 1
+        if not files:  # sem arquivo: guarda o que o pacote declara
+            lic = dist.metadata.get("License-Expression") or dist.metadata.get("License") or "?"
+            (out / "LICENSE.txt").write_text(
+                f"{dist.metadata['Name']} {dist.version}\nLicença: {lic}\n{dist.metadata.get('Home-page') or ''}\n",
+                encoding="utf-8")
+    for f in (ROOT / "licenses").glob("*.txt"):  # textos da LGPL/GPL (o Qt, a libvlc e outros não trazem o texto)
+        shutil.copy2(f, dest / f.name)
+    shutil.copy2(ROOT / "LICENSE", dest / "GPL-3.0.txt")
+    py = Path(sys.base_prefix) / "LICENSE.txt"
+    if py.is_file():
+        shutil.copy2(py, dest / "Python-LICENSE.txt")
+    print(f"licenças: {dest} ({n} arquivos)")
+
+
 def copy_adb(dest):
     """O adb (instalar e abrir o app na TV) vai dentro do onVLC: quem instala não precisa ter nada. Copiado do
     instalado neste PC (winget install Google.PlatformTools), para os dois serem da mesma versão e não brigarem."""
@@ -155,7 +200,7 @@ def copy_adb(dest):
         sys.exit("adb não encontrado: winget install Google.PlatformTools")
     check_signature(src, "Google LLC")
     dest.mkdir(exist_ok=True)
-    for name in ("adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll"):
+    for name in ("adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll", "NOTICE.txt"):  # NOTICE: a licença (Apache-2.0) vai junto
         shutil.copy2(src.with_name(name), dest / name)
     print("adb:", dest)
 
@@ -177,7 +222,7 @@ def stop_running():
     """Antes de trocar os arquivos de dist\\onVLC: pausa a tarefa (senão ela reabre a biblioteca no meio do build e o
     Windows não deixa apagar a pasta) e fecha a biblioteca e o player."""
     winsetup.stop_task()
-    subprocess.run(["taskkill", "/IM", f"{NAME}.exe", "/F"], capture_output=True)
+    subprocess.run([winsetup.TASKKILL, "/IM", f"{NAME}.exe", "/F"], capture_output=True)
     time.sleep(1)
 
 
@@ -206,6 +251,7 @@ def main():
     copy_vlc(exe.parent / "vlc")
     copy_ffmpeg(exe.parent / "ffmpeg")
     copy_adb(exe.parent / "adb")
+    copy_licenses(exe.parent / "licencas")
     copy_tv_app(exe.parent / "tv")
     size = sum(f.stat().st_size for f in exe.parent.rglob("*") if f.is_file())
     print(f"pacote: {size / 2**20:.0f} MB")
@@ -223,9 +269,10 @@ def main():
         q = lambda s: str(s).replace("'", "''")  # noqa: E731  (aspas simples dentro de '…' do PowerShell)
         ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{q(lnk)}');"
               f"$s.TargetPath='{q(exe)}';$s.WorkingDirectory='{q(exe.parent)}';$s.IconLocation='{q(ico)},0';$s.Save()")
-        subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True)
+        subprocess.run([str(winsetup.SYS32 / "WindowsPowerShell" / "v1.0" / "powershell.exe"), "-NoProfile", "-Command", ps],
+                       check=True)
         print("atalho:", lnk)
-    subprocess.run(["ie4uinit.exe", "-show"], capture_output=True)  # Windows relê os ícones
+    subprocess.run([str(winsetup.SYS32 / "ie4uinit.exe"), "-show"], capture_output=True)  # Windows relê os ícones
     winsetup.register_all(exe)  # "Abrir com", tarefa da biblioteca (ligada de novo) e a biblioteca já rodando
     print("registrado como app de vídeo; biblioteca na tarefa do Windows:", exe.with_name(lib_exe.name))
     remove_old_name()
