@@ -8,18 +8,25 @@ Player de vídeo para Windows com o motor do VLC, que leva os seus filmes para a
 - **Configuração guiada:** depois de instalar no PC, um assistente acha a TV na rede, instala o app nela e testa imagem,
   som e velocidade. Ninguém digita endereço de IP.
 
-Tudo grátis. Sem conta, sem nuvem: os filmes nunca saem da sua casa.
+Tudo grátis, sem cadastro e sem nuvem: os filmes nunca saem da sua casa. Interface em português.
 
 ## Instalar
 
-1. Baixe o `instalar-onVLC-x.y.z.exe` da página [Releases](../../releases).
+1. Baixe o `instalar-onVLC-x.y.z.exe` da [versão mais nova](../../releases/latest).
 2. Abra. O Windows pode mostrar **"O Windows protegeu seu computador"**: o instalador não tem uma assinatura digital
    paga. Clique em **Mais informações → Executar assim mesmo**.
 3. Deixe marcada a opção de liberar a TV no firewall (o Windows pede confirmação).
 4. No fim, o onVLC abre o assistente. Tenha o controle da TV por perto.
 
 **Conferir o download (opcional):** no PowerShell, `Get-FileHash .\instalar-onVLC-x.y.z.exe` deve dar o mesmo valor
-que está no `SHA256SUMS.txt` da release.
+que está no `SHA256SUMS.txt` da versão. Cada versão também é analisada no VirusTotal (links na página da versão).
+
+## Usar
+
+- Coloque os filmes e séries na pasta **`Vídeos\onVLC`** do PC (ou use "Mandar para a TV" no menu do player). Eles
+  aparecem na TV em segundos, com capa e sinopse.
+- Na TV, abra o **onVLC** pela tela inicial. Se o PC estiver dormindo, o botão **Ligar o PC** acorda ele pela rede.
+- No PC, **Assistir na TV** (no player) continua na TV o filme que estava tocando, do mesmo ponto.
 
 ### O que precisa
 
@@ -35,8 +42,8 @@ que está no `SHA256SUMS.txt` da release.
 - A **biblioteca** roda no PC em segundo plano e lê a pasta `Vídeos\onVLC`. A TV pede a lista e os filmes a ela.
 - PC e TV combinam uma **chave** no assistente; a TV só aceita um PC que prove ter essa chave, e o PC só atende quem tem
   a chave. Detalhes em [SECURITY.md](SECURITY.md).
-- Capas e sinopses vêm do [TMDB](https://www.themoviedb.org/) (com um token seu, grátis). Legendas, do
-  [OpenSubtitles](https://www.opensubtitles.com/).
+- Capas e sinopses vêm do [TMDB](https://www.themoviedb.org/) (com um token seu, grátis; o assistente ensina a pegar).
+  Legendas da internet, do [OpenSubtitles](https://www.opensubtitles.com/) (com uma conta sua).
 
 ## Desinstalar
 
