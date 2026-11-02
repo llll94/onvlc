@@ -264,6 +264,8 @@ class Setup(QObject):
     @Slot(str)
     def start(self, where):
         """Abre o assistente: "" = do começo; "tv", "capas", "legendas" = direto na etapa."""
+        if not library.enabled():  # configurar a TV precisa da biblioteca: quem abriu o assistente quer ela ligada
+            threading.Thread(target=library.set_enabled, args=(True,), daemon=True).start()
         self.reset()
         self.go({"tv": 1, "capas": 6, "legendas": 7}.get(where, 0))
 

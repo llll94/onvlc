@@ -29,6 +29,9 @@ que está no `SHA256SUMS.txt` da versão. Cada versão também é analisada no V
   aparecem na TV em segundos, com capa e sinopse.
 - Na TV, abra o **onVLC** pela tela inicial. Se o PC estiver dormindo, o botão **Ligar o PC** acorda ele pela rede.
 - No PC, **Assistir na TV** (no player) continua na TV o filme que estava tocando, do mesmo ponto.
+- A **biblioteca** fica ligada em segundo plano para a TV sempre achar o PC (ícone perto do relógio). Para desligar,
+  clique nesse ícone: **até reiniciar o PC** ou **até eu ligar de novo**. Para ligar: no onVLC, menu (☰) → **TV** →
+  **Biblioteca da TV**.
 
 ### O que precisa
 

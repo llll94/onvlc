@@ -604,8 +604,10 @@ Item {
             Column {  // biblioteca ainda abrindo
                 visible: !lib.lib
                 x: 96; y: 300; spacing: 20
-                Text { text: lib.offline ? "Procurando a biblioteca" : "Abrindo a biblioteca"; color: "white"; font.family: lib.font; font.pixelSize: 64; font.weight: Font.ExtraBold }
-                Text { text: "Ela abre junto com o onVLC; leva só um instante."; color: Qt.rgba(1, 1, 1, 0.75); font.family: lib.font; font.pixelSize: 30 }
+                // desligada pela pessoa (ícone perto do relógio ou menu da TV): explica como ligar
+                readonly property bool off: lib.offline && !player.libraryEnabled()
+                Text { text: parent.off ? "A biblioteca da TV está desligada" : lib.offline ? "Procurando a biblioteca" : "Abrindo a biblioteca"; color: "white"; font.family: lib.font; font.pixelSize: 64; font.weight: Font.ExtraBold }
+                Text { text: parent.off ? "Para ligar: menu (☰) → TV → Biblioteca da TV." : "Ela abre junto com o onVLC; leva só um instante."; color: Qt.rgba(1, 1, 1, 0.75); font.family: lib.font; font.pixelSize: 30 }
             }
         }
 

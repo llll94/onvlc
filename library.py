@@ -21,6 +21,41 @@ SECRET_F = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "onVLC" / "l
 HOST = f"http://127.0.0.1:{PORT}"
 
 
+PAUSE_F = SECRET_F.with_name("desligada")  # a pessoa desligou a biblioteca (ver server\pause.go)
+
+
+def _boot_time():
+    import ctypes
+    import time
+    ctypes.windll.kernel32.GetTickCount64.restype = ctypes.c_uint64
+    return int(time.time() - ctypes.windll.kernel32.GetTickCount64() / 1000)
+
+
+def enabled():
+    """A biblioteca está ligada? Desligada = arquivo "desligada" com "sempre", ou "boot:<hora>" deste mesmo boot."""
+    try:
+        s = PAUSE_F.read_text(encoding="utf-8").strip()
+    except OSError:
+        return True
+    if s == "sempre":
+        return False
+    if s.startswith("boot:") and s[5:].isdigit() and abs(int(s[5:]) - _boot_time()) < 120:
+        return False
+    return True
+
+
+def set_enabled(on):
+    """Liga (apaga o arquivo e abre a biblioteca) ou desliga até a pessoa ligar de novo (e fecha a que está aberta)."""
+    if on:
+        PAUSE_F.unlink(missing_ok=True)
+        start_detached()
+        return
+    PAUSE_F.parent.mkdir(parents=True, exist_ok=True)
+    PAUSE_F.write_text("sempre" + chr(10), encoding="utf-8")
+    taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
+    subprocess.run([str(taskkill), "/IM", "onvlc-biblioteca.exe", "/F"], capture_output=True, creationflags=0x08000000)
+
+
 def key():
     try:
         return SECRET_F.read_text(encoding="utf-8").strip()
@@ -68,8 +103,8 @@ def exe():
 
 
 def start_detached():
-    """Abre a biblioteca como processo separado (sobrevive ao fechar o onVLC)."""
-    if running():
+    """Abre a biblioteca como processo separado (sobrevive ao fechar o onVLC). Desligada pela pessoa: não abre."""
+    if running() or not enabled():
         return
     path = exe()
     if not path.exists():

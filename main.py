@@ -772,6 +772,8 @@ class Player(QObject):
 
         def work():
             try:
+                if not library.enabled():
+                    raise RuntimeError("A biblioteca da TV está desligada. Ligue no menu da TV → Biblioteca da TV.")
                 if not self.box.tv:
                     raise RuntimeError("Nenhuma TV ligada a este PC ainda. Configure em Configurações → TV.")
                 # 1. o vídeo precisa estar na biblioteca (pasta onVLC): de fora, vai por link ou cópia
@@ -1052,6 +1054,19 @@ class Player(QObject):
     @Slot()
     def close(self):
         self.win.close()
+
+    @Slot(result=bool)
+    def libraryEnabled(self):
+        """A biblioteca da TV está ligada (a pessoa não desligou)?"""
+        return library.enabled()
+
+    @Slot()
+    def toggleLibrary(self):
+        """Liga ou desliga a biblioteca da TV (a escolha vale até mudar de novo; ver server/pause.go)."""
+        on = not library.enabled()
+        threading.Thread(target=library.set_enabled, args=(on,), daemon=True).start()
+        self.toast.emit("Biblioteca da TV ligada" if on else "Biblioteca da TV desligada: a TV não acha o PC até você ligar de novo")
+        self.stateChanged.emit()
 
     @Slot(result=str)
     def libraryKey(self):

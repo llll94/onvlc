@@ -51,6 +51,7 @@ Item {
         { id: "audio", nome: "Áudio", ic: "vol", desc: "Faixa, volume e saída." },
         { id: "video", nome: "Vídeo", ic: "screen", desc: "Imagem, tamanho e janela." },
         { id: "legenda", nome: "Legenda", ic: "cc", desc: "Faixas, arquivos e sincronia." },
+        { id: "tv", nome: "TV", ic: "tv", desc: "Pasta da TV, configurar a TV e ligar ou desligar a biblioteca." },
         { id: "ferramentas", nome: "Ferramentas", ic: "tools", desc: "Informações e utilidades." },
         { id: "exibir", nome: "Exibir", ic: "eye", desc: "O que aparece na tela." },
         { id: "ajuda", nome: "Ajuda", ic: "help", desc: "" }
@@ -213,6 +214,7 @@ Item {
                     { t: "Escolher vídeos…", act: "tvAdd" },
                     { t: "Abrir pasta no Windows", act: "tvOpen" },
                     { head: "Configurar" },
+                    { t: "Biblioteca da TV", sw: player.libraryEnabled(), act: "libToggle" },
                     { t: "TV", v: setup.st.hasTv ? setup.st.tvName : "nenhuma", act: "setup:tv" },
                     { t: "Capas e sinopses (TMDB)", v: setup.st.tmdb && setup.st.tmdb.has ? "ligado" : "desligado", act: "setup:capas" },
                     { t: "Legendas automáticas", v: setup.st.os && setup.st.os.has ? "ligado" : "desligado", act: "setup:legendas" },
@@ -267,6 +269,7 @@ Item {
         case "tvSend": player.tvSendCurrent(); break
         case "tvAdd": player.tvAddFiles(); break
         case "tvOpen": player.tvOpenFolder(); break
+        case "libToggle": player.toggleLibrary(); menuOpen = false; break
         }
     }
 

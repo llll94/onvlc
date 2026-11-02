@@ -25,6 +25,9 @@ var icon []byte
 
 func main() {
 	os.MkdirAll(appData, 0o755)
+	if pausedNow() { // a pessoa desligou: a tarefa do Windows abre a cada minuto, e sai na hora (sem log, sem rede)
+		return
+	}
 	setupLog()
 	// processo que fica ligado o dia todo: o coletor de memória trabalha mais cedo e devolve ao Windows
 	debug.SetGCPercent(50)
@@ -119,7 +122,10 @@ func tray(lib *Library) {
 	info.Disable()
 	folder := systray.AddMenuItem("Abrir a pasta da biblioteca", "")
 	systray.AddSeparator()
-	quit := systray.AddMenuItem("Desligar a biblioteca da TV", "")
+	quitBoot := systray.AddMenuItem("Desligar até reiniciar o PC",
+		"A TV não acha o PC até você reiniciar o computador (ou ligar de novo pelo onVLC)")
+	quitAlways := systray.AddMenuItem("Desligar até eu ligar de novo",
+		"Para ligar: abra o onVLC, menu da TV → Biblioteca da TV")
 	refresh := func() {
 		lib.mu.Lock()
 		movies, shows := 0, map[string]bool{}
@@ -157,7 +163,14 @@ func tray(lib *Library) {
 				refresh()
 			case <-folder.ClickedCh:
 				exec.Command(filepath.Join(os.Getenv("SystemRoot"), "explorer.exe"), libDir).Start() // caminho completo
-			case <-quit.ClickedCh:
+			case <-quitBoot.ClickedCh:
+				pause(true)
+				log.Printf("desligada até reiniciar o PC")
+				systray.Quit()
+				return
+			case <-quitAlways.ClickedCh:
+				pause(false)
+				log.Printf("desligada até ligar de novo pelo onVLC")
 				systray.Quit()
 				return
 			}
