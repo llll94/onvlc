@@ -13,7 +13,7 @@ jobs:
   check:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Nenhuma chave no repositório
         shell: bash
@@ -22,7 +22,7 @@ jobs:
             echo "chave ou certificado no repositório"; exit 1
           fi
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: server/go.mod
 
@@ -34,7 +34,7 @@ jobs:
           go vet ./...
           go build ./...
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
