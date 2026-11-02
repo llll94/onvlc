@@ -1,0 +1,4 @@
+# Go exige quebra de linha LF (o gofmt recusa CRLF): vale em qualquer máquina, inclusive na verificação do GitHub
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
