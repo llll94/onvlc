@@ -72,6 +72,7 @@ Revisão completa em 01/11/2026; o modelo de hoje:
 | `winsetup.py` | "Abrir com", tarefa da biblioteca (XML escapado), `unregister`, `wipe_data` |
 | `tvfolder.py`, `thumbs.py`, `opensubs.py` | Painel "Pasta onVLC"; miniaturas locais (biblioteca fora); OpenSubtitles (link de download só `https`) |
 | `server\auth.go` | Segredo, HMAC, `hostOK`, `privateSource`, `localPath`, log rotativo |
+| `server\pause.go` + `library.enabled()/set_enabled()` | Desligar a biblioteca: arquivo `library\desligada` = `sempre` (até ligar pelo menu TV → Biblioteca da TV) ou `boot:<hora do boot>` (até reiniciar). A tarefa continua abrindo a cada minuto e a biblioteca sai na hora. O assistente liga de novo |
 | `server\http.go`, `setup.go` | Rotas (ver abaixo); assistente (`/api/clients`, `/api/reload-keys`, `/api/selftest`, `/api/speed`, `/api/selftest/result`) |
 | `server\library.go`, `listing.go`, `names.go`, `probe.go`, `thumbs.go`, `tmdb.go`, `positions.go`, `watch.go`, `main.go` | Índice e varredura, listagem (caminhos só para o PC), legendas (só arquivos comuns), ffprobe (`-i`), miniaturas, TMDB (token atômico, nomes de imagem validados), posições no registro, vigia da pasta, porta exclusiva + limite de 64 conexões |
 | `tvui\` | Página da biblioteca e do player da TV (texto sempre por `esc()`) |
